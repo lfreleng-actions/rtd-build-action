@@ -32,19 +32,28 @@ def property_rows(outcome: dict[str, object]) -> list[str]:
     rows = [
         "| Property | Value |",
         "| -------- | ----- |",
-        f"| Mode | `{text_of(outcome, 'mode')}` |",
-        f"| Project | `{text_of(outcome, 'project')}` |",
-        f"| Umbrella | `{text_of(outcome, 'parent_project')}` |",
-        f"| Version | `{text_of(outcome, 'version_slug')}` |",
+        f"| Mode | `{flatten(text_of(outcome, 'mode'))}` |",
+        f"| Project | `{flatten(text_of(outcome, 'project'))}` |",
+        f"| Umbrella | `{flatten(text_of(outcome, 'parent_project'))}` |",
+        f"| Version | `{flatten(text_of(outcome, 'version_slug'))}` |",
         f"| Project created | {flag(outcome, 'project_created')} |",
         f"| Subproject attached | {flag(outcome, 'subproject_created')} |",
         f"| Version activated | {flag(outcome, 'version_activated')} |",
     ]
-    build_id = text_of(outcome, "build_id")
+    build_id = flatten(text_of(outcome, "build_id"))
     if build_id:
         rows.append(f"| Build | `{build_id}` ({flag(outcome, 'build_success')}) |")
     rows.append("")
     return rows
+
+
+def flatten(text: str) -> str:
+    """Collapse a message onto one line.
+
+    An error surfaced from the API can span several lines, and a raw
+    newline inside a list item ends the item.
+    """
+    return " ".join(text.split())
 
 
 def note_lines(outcome: dict[str, object]) -> list[str]:
@@ -53,7 +62,7 @@ def note_lines(outcome: dict[str, object]) -> list[str]:
     if not isinstance(raw, list) or not raw:
         return []
     lines = ["<details><summary>Details</summary>", ""]
-    lines += [f"- {note}" for note in cast("list[object]", raw)]
+    lines += [f"- {flatten(str(note))}" for note in cast("list[object]", raw)]
     lines += ["", "</details>", ""]
     return lines
 

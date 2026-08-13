@@ -438,5 +438,20 @@ class OtherConsumers(unittest.TestCase):
         self.assertEqual(outcome.project, "onap-cps-ncmp-dmi-plugin")
 
 
+class Rendering(unittest.TestCase):
+    """The summary renderer survives awkward text."""
+
+    def test_notes_stay_on_one_line_each(self) -> None:
+        """An API error can span lines; a list item cannot."""
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+        from lib.render_summary import note_lines  # noqa: PLC0415
+
+        outcome: dict[str, object] = {
+            "notes": ["Read the Docs said:\n  detail: Not found.\n  code: 404"]
+        }
+        for line in note_lines(outcome):
+            self.assertNotIn("\n", line)
+
+
 if __name__ == "__main__":
     _ = unittest.main(verbosity=2)
