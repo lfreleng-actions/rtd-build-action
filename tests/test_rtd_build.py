@@ -27,6 +27,7 @@ from lib.rtd_naming import (  # noqa: E402 - path set above
     NamingError,
     parse_overrides,
     project_slug,
+    repository_url_from,
     slugify,
     umbrella_from_url,
 )
@@ -54,6 +55,7 @@ class FakeClient:
         self.build_succeeds: bool = build_succeeds
         self.calls: list[str] = []
         self.builds: list[tuple[str, str]] = []
+        self.repositories: dict[str, str] = {}
         self._next_build: int = 1000
 
     def project_exists(self, project: str) -> bool:
@@ -67,6 +69,7 @@ class FakeClient:
         """Record a project creation."""
         self.calls.append(f"create:{name}")
         self.projects.add(name)
+        self.repositories[name] = repository_url
         return {"name": name, "repository": repository_url, "homepage": homepage}
 
     def project_update(self, project: str, **fields: str) -> dict[str, object]:
@@ -126,6 +129,8 @@ def fast(
     gerrit_change_url: str = ONAP_URL,
     branch: str = "master",
     default_branch: str = "",
+    default_version: str = "latest",
+    repository_url: str = "",
     project: str = "",
     parent_project: str = "",
     project_overrides: str = "",
@@ -137,6 +142,8 @@ def fast(
         gerrit_change_url=gerrit_change_url,
         branch=branch,
         default_branch=default_branch,
+        default_version=default_version,
+        repository_url=repository_url,
         project=project,
         parent_project=parent_project,
         project_overrides=project_overrides,
@@ -436,6 +443,96 @@ class OtherConsumers(unittest.TestCase):
         client = FakeClient(projects={"onap-cps-ncmp-dmi-plugin", "onap-doc"})
         outcome = run(fast(gerrit_project="cps/ncmp-dmi-plugin"), client)
         self.assertEqual(outcome.project, "onap-cps-ncmp-dmi-plugin")
+
+
+class RepositoryUrl(unittest.TestCase):
+    """A new project records a clonable URL, not a review URL."""
+
+    def test_derives_from_an_onap_change_url(self) -> None:
+        self.assertEqual(
+            repository_url_from(ONAP_URL, "cps"),
+            "https://gerrit.onap.org/r/cps",
+        )
+
+    def test_derives_from_an_opendaylight_change_url(self) -> None:
+        """OpenDaylight serves reviews under a different path prefix."""
+        self.assertEqual(
+            repository_url_from(
+                "https://git.opendaylight.org/gerrit/c/docs/+/1", "docs"
+            ),
+            "https://git.opendaylight.org/gerrit/docs",
+        )
+
+    def test_keeps_a_nested_project_path(self) -> None:
+        self.assertEqual(
+            repository_url_from(ONAP_URL, "cps/ncmp-dmi-plugin"),
+            "https://gerrit.onap.org/r/cps/ncmp-dmi-plugin",
+        )
+
+    def test_rejects_a_url_with_no_review_segment(self) -> None:
+        with self.assertRaises(NamingError):
+            _ = repository_url_from("https://gerrit.onap.org/", "cps")
+
+    def test_creation_records_the_repository_not_the_change(self) -> None:
+        client = FakeClient(projects={"onap-doc"})
+        _ = run(fast(mode=MODE_MERGE), client)
+        created = [c for c in client.calls if c.startswith("create:")]
+        self.assertEqual(created, ["create:onap-cps"])
+        self.assertEqual(
+            client.repositories["onap-cps"], "https://gerrit.onap.org/r/cps"
+        )
+
+    def test_an_explicit_repository_url_wins(self) -> None:
+        client = FakeClient(projects={"onap-doc"})
+        settings = fast(
+            mode=MODE_MERGE, repository_url="https://example.org/mirror.git"
+        )
+        _ = run(settings, client)
+        self.assertEqual(
+            client.repositories["onap-cps"], "https://example.org/mirror.git"
+        )
+
+
+class LandingVersusLatest(unittest.TestCase):
+    """The landing version and the default-branch alias stay separate.
+
+    Read the Docs fixes the default branch's slug as ``latest``. A
+    project may still point its landing page elsewhere, so building
+    whatever ``default_version`` names would build the wrong thing.
+    """
+
+    def _client(self) -> FakeClient:
+        return FakeClient(
+            projects={"onap-cps", "onap-doc"},
+            subprojects={"onap-doc": ["onap-cps"]},
+            default_versions={"onap-cps": "latest"},
+        )
+
+    def test_default_branch_builds_latest_not_the_landing_version(self) -> None:
+        client = self._client()
+        settings = fast(mode=MODE_MERGE, branch="master", default_version="stable")
+        outcome = run(settings, client)
+        self.assertEqual(outcome.version_slug, "latest")
+        self.assertIn(("onap-cps", "latest"), client.builds)
+        self.assertNotIn(("onap-cps", "stable"), client.builds)
+
+    def test_discovery_builds_latest_not_the_landing_version(self) -> None:
+        client = self._client()
+        settings = fast(
+            mode=MODE_MERGE,
+            branch="maintenance/3.7.10",
+            default_version="stable",
+        )
+        _ = run(settings, client)
+        self.assertEqual(client.builds[0], ("onap-cps", "latest"))
+        self.assertNotIn(("onap-cps", "stable"), client.builds)
+
+    def test_landing_version_still_reaches_the_project(self) -> None:
+        client = self._client()
+        settings = fast(mode=MODE_MERGE, branch="master", default_version="stable")
+        outcome = run(settings, client)
+        self.assertTrue(outcome.default_version_changed)
+        self.assertEqual(client.default_versions["onap-cps"], "stable")
 
 
 class Rendering(unittest.TestCase):

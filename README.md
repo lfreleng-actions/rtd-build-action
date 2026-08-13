@@ -68,11 +68,11 @@ The umbrella comes from the change URL host. A URL on
 `gerrit.onap.org` yields `onap`, one on `gerrit.o-ran-sc.org` yields
 `o-ran-sc`, and one on `git.opendaylight.org` yields `opendaylight`.
 
-| Value | Derivation |
-| ----- | ---------- |
-| Project | `<umbrella>-<gerrit project>`, joined with hyphens |
-| Umbrella project | `<umbrella>-<parent_suffix>` |
-| Version | The branch name, slugified |
+| Value            | Derivation                                         |
+| ---------------- | -------------------------------------------------- |
+| Project          | `<umbrella>-<gerrit project>`, joined with hyphens |
+| Umbrella project | `<umbrella>-<parent_suffix>`                       |
+| Version          | The branch name, slugified                         |
 
 Two automatic fallbacks handle an organisation that imported existing
 documentation, where the top-level docs sit under the bare umbrella name
@@ -102,8 +102,37 @@ The action slugifies every branch before it reaches the API.
 The repository's default branch is a separate case. ReadTheDocs tracks
 that branch under its `latest` alias rather than giving it a version slug,
 so a request for a version named `master` addresses something that does
-not exist. The action maps `master` and `main` onto the default version
+not exist. The action maps `master` and `main` onto that alias
 automatically; set `default_branch` when a repository uses another name.
+
+The `latest` alias and `default_version` serve separate roles.
+ReadTheDocs fixes the alias, which always tracks the default branch,
+while `default_version` names whichever version the landing page serves. A
+project may point its landing page at a release branch and still build
+its default branch as `latest`, so the action keeps the two apart.
+
+## Creating a project
+
+When the merge lane finds no project it creates one, which needs a
+repository URL. A Gerrit change URL points at a review rather than a
+repository, so recording it would leave the new project unable to clone
+anything.
+
+The action derives the repository URL from the same host instead, taking
+the review path that precedes the `/c/` segment:
+
+<!-- markdownlint-disable MD013 -->
+
+| Change URL                                       | Derived repository                         |
+| ------------------------------------------------ | ------------------------------------------ |
+| `https://gerrit.onap.org/r/c/cps/+/1`            | `https://gerrit.onap.org/r/cps`            |
+| `https://git.opendaylight.org/gerrit/c/docs/+/1` | `https://git.opendaylight.org/gerrit/docs` |
+
+<!-- markdownlint-enable MD013 -->
+
+Set `repository_url` to override the derivation. Where the change URL
+carries no review path and no override arrives, the action stops with an
+explanation rather than recording an address that cannot work.
 
 ## Inputs
 

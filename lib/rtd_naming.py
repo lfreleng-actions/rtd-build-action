@@ -72,6 +72,44 @@ def umbrella_from_url(change_url: str) -> str:
     return slugify(labels[1])
 
 
+def repository_url_from(change_url: str, gerrit_project: str) -> str:
+    """Derive a clonable repository URL from a Gerrit change URL.
+
+    A change URL points at a review, not at a repository. Recording it
+    against a Read the Docs project leaves that project unable to clone
+    anything, so build the repository URL from the same host instead.
+
+    Gerrit change URLs carry the review path before a ``/c/`` segment,
+    and hosts differ in what that prefix is: ONAP serves reviews under
+    ``/r/c/...`` and OpenDaylight under ``/gerrit/c/...``. Taking
+    everything before ``/c/`` keeps both correct.
+
+    Raises:
+        NamingError: If the URL carries no recognisable review path.
+    """
+    if not gerrit_project.strip():
+        msg = "Cannot derive a repository URL without a Gerrit project"
+        raise NamingError(msg)
+
+    parsed = urlparse(change_url.strip())
+    if not parsed.scheme or not parsed.hostname:
+        msg = f"Cannot derive a repository URL from {change_url!r}"
+        raise NamingError(msg)
+
+    marker = "/c/"
+    path = parsed.path
+    if marker not in path:
+        msg = (
+            f"Cannot derive a repository URL from {change_url!r}: "
+            "the path carries no '/c/' review segment. Set repository_url."
+        )
+        raise NamingError(msg)
+
+    base = path.split(marker, 1)[0].rstrip("/")
+    project = gerrit_project.strip().strip("/")
+    return f"{parsed.scheme}://{parsed.netloc}{base}/{project}"
+
+
 def project_slug(umbrella: str, gerrit_project: str) -> str:
     """Build the Read the Docs project slug for a Gerrit project.
 

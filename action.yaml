@@ -158,6 +158,20 @@ runs:
           exit 1
         fi
 
+        # The token lands in an INI file, where a line break would start
+        # a new key. Reject anything that is not a single line before
+        # writing, rather than trusting the value to be well formed.
+        if [ "$(printf '%s' "${RTD_TOKEN}" | wc -l | tr -d ' ')" != "0" ]; then
+          echo 'Error: rtd_token must not contain a line break ❌'
+          exit 1
+        fi
+        case "${RTD_TOKEN}" in
+          *[[:space:]]*)
+            echo 'Error: rtd_token must not contain whitespace ❌'
+            exit 1
+            ;;
+        esac
+
         # lftools-uv reads this file through platformdirs, falling back
         # to the legacy location and migrating it. Writing the legacy
         # path therefore works on every supported version.

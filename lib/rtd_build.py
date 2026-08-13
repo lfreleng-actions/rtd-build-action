@@ -27,6 +27,7 @@ from lib.rtd_naming import (
     parent_slug,
     parse_overrides,
     project_slug,
+    repository_url_from,
     slugify,
     umbrella_from_url,
 )
@@ -44,6 +45,15 @@ _FAILED_STATES = {"failed", "cancelled"}
 #: tracks that branch as ``latest`` instead, so asking it to build a
 #: version named ``master`` addresses a version that does not exist.
 DEFAULT_BRANCH_NAMES = ("master", "main")
+
+#: The slug under which Read the Docs publishes the default branch.
+#:
+#: Read the Docs fixes this name, so it stays a constant rather than an
+#: input. It differs from ``default_version``, which names whichever
+#: version the landing page serves: a project may point its landing page
+#: at a release branch while its default branch still builds as
+#: ``latest``. Conflating the two builds the wrong version.
+LATEST_ALIAS = "latest"
 
 
 @dataclass(frozen=True)
@@ -202,8 +212,15 @@ def ensure_project(
         return
 
     homepage = settings.homepage or f"https://{outcome.project}.readthedocs.io"
-    repository = settings.repository_url or settings.gerrit_change_url
-    outcome.note(f"Creating project {outcome.project!r}")
+
+    # A change URL points at a review rather than a repository, so
+    # recording it would leave the new project unable to clone anything.
+    repository = settings.repository_url or repository_url_from(
+        settings.gerrit_change_url,
+        settings.gerrit_project,
+    )
+
+    outcome.note(f"Creating project {outcome.project!r} from {repository}")
     _ = client.project_create(outcome.project, repository, homepage)
     outcome.project_created = True
 
@@ -281,16 +298,14 @@ def build_branch(
     """Build the branch under change, discovering it when necessary."""
     version = outcome.version_slug
 
-    if version == settings.default_version:
+    if version == LATEST_ALIAS:
         wait_for_build(client, outcome.project, version, settings, outcome)
         return
 
     if client.version_active(outcome.project, version) is None:
-        discovery = f"building {settings.default_version!r} to trigger branch discovery"
+        discovery = f"building {LATEST_ALIAS!r} to trigger branch discovery"
         outcome.note(f"Read the Docs has not seen {version!r}; {discovery}")
-        wait_for_build(
-            client, outcome.project, settings.default_version, settings, outcome
-        )
+        wait_for_build(client, outcome.project, LATEST_ALIAS, settings, outcome)
 
     wait_for_build(client, outcome.project, version, settings, outcome)
 
@@ -327,9 +342,9 @@ def run(settings: Settings, client: SupportsReadTheDocs) -> Outcome:
     outcome.parent_project = parent
 
     if tracks_latest(settings.branch, settings):
-        outcome.version_slug = settings.default_version
+        outcome.version_slug = LATEST_ALIAS
         if settings.branch:
-            tracked = f"{settings.default_version!r}, which tracks the default branch"
+            tracked = f"{LATEST_ALIAS!r}, which tracks the default branch"
             outcome.note(f"Branch {settings.branch!r} publishes as {tracked}")
     else:
         outcome.version_slug = slugify(settings.branch)
