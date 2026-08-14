@@ -1,53 +1,275 @@
 ---
 # SPDX-License-Identifier: Apache-2.0
-# SPDX-FileCopyrightText: 2025 The Linux Foundation
+# SPDX-FileCopyrightText: 2026 The Linux Foundation
 
-# actions-template
-name: "🛠️ Actions Template"
-description: "Description of action"
-# Any relevant notes/observations can go here
+# rtd-build-action
+name: "📚 ReadTheDocs Build"
+description: "Verify or publish a project's documentation on ReadTheDocs"
+
+# Drives the ReadTheDocs API through lftools-uv, which runs via uvx so
+# that release-engineering tooling stays out of the interpreter a
+# documentation build uses.
+#
+# Name resolution runs automatically: supply the Gerrit project and
+# change URL and the action derives the ReadTheDocs slugs. Every derived
+# value yields to an explicit input.
 
 inputs:
-  input:
-    description: "Description of input"
+  mode:
+    description: "Lane to run: 'verify' reports, 'merge' publishes"
     required: true
+  rtd_token:
+    description: "ReadTheDocs API token"
+    required: true
+  gerrit_project:
+    # yamllint disable-line rule:line-length
+    description: "Gerrit project path, for example 'cps' or 'cps/ncmp-dmi-plugin'"
+    required: false
+    default: ""
+  gerrit_change_url:
+    # yamllint disable-line rule:line-length
+    description: "Gerrit change URL; used when gerrit_url stays empty"
+    required: false
+    default: ""
+  gerrit_url:
+    # yamllint disable-line rule:line-length
+    description: "Gerrit server URL; preferred source for the umbrella name and repository URL"
+    required: false
+    default: ""
+  branch:
+    description: "Branch under change; converted to a ReadTheDocs version slug"
+    required: false
+    default: ""
+  default_branch:
+    # yamllint disable-line rule:line-length
+    description: "Branch ReadTheDocs publishes as the default version; empty accepts master or main"
+    required: false
+    default: ""
+  project:
+    description: "ReadTheDocs project slug; empty derives one"
+    required: false
+    default: ""
+  parent_project:
+    description: "Umbrella ReadTheDocs project slug; empty derives one"
+    required: false
+    default: ""
+  parent_suffix:
+    description: "Suffix appended to the umbrella name for its docs project"
+    required: false
+    default: "doc"
+  project_overrides:
+    # yamllint disable-line rule:line-length
+    description: "Newline or comma separated 'from=to' slug rewrites for projects that follow no derivable rule"
+    required: false
+    default: ""
+  default_version:
+    description: "Version ReadTheDocs serves as the landing page"
+    required: false
+    default: "latest"
+  repository_url:
+    description: "Repository URL recorded when creating a project"
+    required: false
+    default: ""
+  homepage:
+    description: "Homepage URL recorded when creating a project"
+    required: false
+    default: ""
+  build_timeout:
+    description: "Seconds to wait for a documentation build"
+    required: false
+    default: "1800"
+  create_timeout:
+    description: "Seconds to wait for a newly created project to appear"
+    required: false
+    default: "600"
+  poll_interval:
+    description: "Seconds between polls while waiting"
+    required: false
+    default: "10"
+  lftools_version:
+    # yamllint disable-line rule:line-length
+    description: "Version of lftools-uv to run; pin this to keep runs reproducible"
+    required: false
+    default: "0.5.3"
+  summary:
+    description: "Write a report to the workflow step summary"
+    required: false
+    default: "true"
 
 outputs:
-  output:
-    description: "Description of output"
-    value: ${{ steps.code.outputs.output }}
+  project:
+    description: "ReadTheDocs project slug the action used"
+    value: ${{ steps.build.outputs.project }}
+  parent_project:
+    description: "Umbrella project slug the action used"
+    value: ${{ steps.build.outputs.parent_project }}
+  version_slug:
+    description: "Version slug the action built"
+    value: ${{ steps.build.outputs.version_slug }}
+  project_exists:
+    description: "Whether the project exists on ReadTheDocs"
+    value: ${{ steps.build.outputs.project_exists }}
+  project_created:
+    description: "Whether this run created the project"
+    value: ${{ steps.build.outputs.project_created }}
+  subproject_created:
+    description: "Whether this run attached the project to its umbrella"
+    value: ${{ steps.build.outputs.subproject_created }}
+  version_activated:
+    description: "Whether this run made a discovered version visible"
+    value: ${{ steps.build.outputs.version_activated }}
+  build_id:
+    description: "Identifier of the documentation build, when one ran"
+    value: ${{ steps.build.outputs.build_id }}
+  build_success:
+    description: "Whether the documentation build succeeded"
+    value: ${{ steps.build.outputs.build_success }}
+  documentation_url:
+    description: "URL of the published documentation"
+    value: ${{ steps.build.outputs.documentation_url }}
+  outcome_json:
+    description: "Complete outcome as a JSON string"
+    value: ${{ steps.build.outputs.outcome_json }}
 
 runs:
   using: "composite"
   steps:
-    - name: "Friendly Name"
-      id: code
+    - name: "Provide uv"
+      id: uv
+      shell: bash
+      run: |
+        # Provide uv
+        set -euo pipefail
+
+        if command -v uvx >/dev/null 2>&1; then
+          echo "uvx already present ✅"
+          exit 0
+        fi
+        echo 'Error: uvx not found on PATH ❌'
+        echo 'Add astral-sh/setup-uv before this action.'
+        exit 1
+
+    - name: "Write the ReadTheDocs credentials"
+      id: credentials
       shell: bash
       env:
-        INPUT_VALUE: ${{ inputs.input }}
+        RTD_TOKEN: ${{ inputs.rtd_token }}
       run: |
-        # Friendly Name
-        input="$INPUT_VALUE"
-        if [ -z "$input" ]; then
-          echo "Error: mandatory input was not set/configured ❌"
+        # Write the ReadTheDocs credentials
+        set -euo pipefail
+
+        if [ -z "${RTD_TOKEN}" ]; then
+          echo 'Error: rtd_token is empty ❌'
           exit 1
         fi
 
-        # Write the output using the multiline heredoc format with a random
-        # delimiter so that an input containing newlines cannot inject
-        # additional keys into $GITHUB_OUTPUT (output-file injection). The
-        # delimiter is built from shell-builtin randomness (no external
-        # tools such as openssl/uuidgen, which are not guaranteed on
-        # self-hosted runners) and regenerated until it is provably absent
-        # from the value being emitted.
-        delimiter="ghadelim_${RANDOM}${RANDOM}${RANDOM}${RANDOM}"
-        while [[ "$input" == *"$delimiter"* ]]; do
-          delimiter="ghadelim_${RANDOM}${RANDOM}${RANDOM}${RANDOM}"
+        # The token lands in an INI file, where a line break would start
+        # a new key. Reject anything that is not a single line before
+        # writing, rather than trusting the value to be well formed.
+        if [ "$(printf '%s' "${RTD_TOKEN}" | wc -l | tr -d ' ')" != "0" ]; then
+          echo 'Error: rtd_token must not contain a line break ❌'
+          exit 1
+        fi
+        case "${RTD_TOKEN}" in
+          *[[:space:]]*)
+            echo 'Error: rtd_token must not contain whitespace ❌'
+            exit 1
+            ;;
+        esac
+
+        # lftools-uv reads this file through platformdirs, falling back
+        # to the legacy location and migrating it. Writing the legacy
+        # path therefore works on every supported version.
+        config_dir="${HOME}/.config/lftools"
+        mkdir -p "${config_dir}"
+        umask 077
+        cat > "${config_dir}/lftools.ini" <<'EOF'
+        [rtd]
+        endpoint=https://readthedocs.org/api/v3/
+        EOF
+        printf 'token=%s\n' "${RTD_TOKEN}" >> "${config_dir}/lftools.ini"
+        chmod 600 "${config_dir}/lftools.ini"
+        echo "Credentials written ✅"
+
+    - name: "Run the ReadTheDocs lane"
+      id: build
+      shell: bash
+      env:
+        INPUT_MODE: ${{ inputs.mode }}
+        INPUT_GERRIT_PROJECT: ${{ inputs.gerrit_project }}
+        INPUT_GERRIT_URL: ${{ inputs.gerrit_url }}
+        INPUT_GERRIT_CHANGE_URL: ${{ inputs.gerrit_change_url }}
+        INPUT_BRANCH: ${{ inputs.branch }}
+        INPUT_DEFAULT_BRANCH: ${{ inputs.default_branch }}
+        INPUT_PROJECT: ${{ inputs.project }}
+        INPUT_PARENT_PROJECT: ${{ inputs.parent_project }}
+        INPUT_PARENT_SUFFIX: ${{ inputs.parent_suffix }}
+        INPUT_PROJECT_OVERRIDES: ${{ inputs.project_overrides }}
+        INPUT_DEFAULT_VERSION: ${{ inputs.default_version }}
+        INPUT_REPOSITORY_URL: ${{ inputs.repository_url }}
+        INPUT_HOMEPAGE: ${{ inputs.homepage }}
+        INPUT_BUILD_TIMEOUT: ${{ inputs.build_timeout }}
+        INPUT_CREATE_TIMEOUT: ${{ inputs.create_timeout }}
+        INPUT_POLL_INTERVAL: ${{ inputs.poll_interval }}
+        INPUT_LFTOOLS_VERSION: ${{ inputs.lftools_version }}
+        INPUT_SUMMARY: ${{ inputs.summary }}
+        ACTION_PATH: ${{ github.action_path }}
+      run: |
+        # Run the ReadTheDocs lane
+        set -uo pipefail
+
+        if [ "$INPUT_MODE" != "verify" ] && [ "$INPUT_MODE" != "merge" ]; then
+          echo 'Error: mode accepts only verify or merge ❌'
+          exit 1
+        fi
+        if [ "$INPUT_SUMMARY" != "true" ] \
+           && [ "$INPUT_SUMMARY" != "false" ]; then
+          echo 'Error: summary accepts only true or false ❌'
+          exit 1
+        fi
+        for value in "$INPUT_BUILD_TIMEOUT" "$INPUT_CREATE_TIMEOUT" \
+                     "$INPUT_POLL_INTERVAL"; do
+          if ! printf '%s' "$value" | grep -Eq '^[0-9]+$'; then
+            echo 'Error: timeout and interval inputs accept whole numbers ❌'
+            exit 1
+          fi
         done
-        {
-          printf '%s<<%s\n' 'output' "$delimiter"
-          printf '%s\n' "$input"
-          printf '%s\n' "$delimiter"
-        } >> "$GITHUB_OUTPUT"
-        echo "Action received: $input ✅"
-        echo "Action received: $input ✅" >> "$GITHUB_STEP_SUMMARY"
+
+        args=(
+          --mode "$INPUT_MODE"
+          --gerrit-project "$INPUT_GERRIT_PROJECT"
+          --gerrit-url "$INPUT_GERRIT_URL"
+          --gerrit-change-url "$INPUT_GERRIT_CHANGE_URL"
+          --branch "$INPUT_BRANCH"
+          --default-branch "$INPUT_DEFAULT_BRANCH"
+          --project "$INPUT_PROJECT"
+          --parent-project "$INPUT_PARENT_PROJECT"
+          --parent-suffix "$INPUT_PARENT_SUFFIX"
+          --project-overrides "$INPUT_PROJECT_OVERRIDES"
+          --default-version "$INPUT_DEFAULT_VERSION"
+          --repository-url "$INPUT_REPOSITORY_URL"
+          --homepage "$INPUT_HOMEPAGE"
+          --build-timeout "$INPUT_BUILD_TIMEOUT"
+          --create-timeout "$INPUT_CREATE_TIMEOUT"
+          --poll-interval "$INPUT_POLL_INTERVAL"
+          --lftools-version "$INPUT_LFTOOLS_VERSION"
+        )
+
+        outcome="$(PYTHONPATH="${ACTION_PATH}" \
+          python3 -m lib.cli "${args[@]}")"
+        status=$?
+
+        if [ -n "$outcome" ]; then
+          printf '%s\n' "$outcome"
+          printf '%s' "$outcome" \
+            | PYTHONPATH="${ACTION_PATH}" python3 -m lib.emit_outputs \
+            >> "$GITHUB_OUTPUT"
+
+          if [ "$INPUT_SUMMARY" = "true" ]; then
+            printf '%s' "$outcome" \
+              | PYTHONPATH="${ACTION_PATH}" python3 -m lib.render_summary \
+              >> "$GITHUB_STEP_SUMMARY"
+          fi
+        fi
+
+        exit "$status"

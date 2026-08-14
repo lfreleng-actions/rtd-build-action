@@ -1,6 +1,6 @@
 ---
 # SPDX-License-Identifier: Apache-2.0
-# SPDX-FileCopyrightText: 2025 The Linux Foundation
+# SPDX-FileCopyrightText: 2026 The Linux Foundation
 
 # Action test/validation workflow
 name: "Test GitHub Action 🧪"
@@ -20,24 +20,23 @@ concurrency:
 permissions: {}
 
 jobs:
-  ### Test the GitHub Action in this Repository ###
-  tests:
-    name: "Test local GitHub Action"
+  ### Unit tests for the lane logic ###
+  unit:
+    name: "Unit tests"
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    timeout-minutes: 10 # Increase this timeout value as needed
+    timeout-minutes: 10
     steps:
-      # Load the egress allow-list out-of-band from the
-      # organisation's .github repository and publish it as
-      # $CONNECTION_ALLOW_LIST for the harden-runner step below.
+      # Load the egress allow-list out-of-band from the organisation's
+      # .github repository and publish it as $CONNECTION_ALLOW_LIST for
+      # the harden-runner step below.
       # yamllint disable-line rule:line-length
       - uses: lfreleng-actions/harden-runner-block-action@6db537b3e6d060c3287c5a3ce2c28b55b0af330d  # v0.2.1
         with:
-          config: '@18d9c4446bea555d0783e850f6d295f844fe8f67'  # v0.1.1
+          config: '@d43a857514f81ce2af4230aca16e179ef96148d8'  # v0.13.0
 
-      # Harden the runner with the just-loaded allow-list.
-      - name: 'Harden runner (block)'
+      - name: "Harden runner (block)"
         # yamllint disable-line rule:line-length
         uses: step-security/harden-runner@b09bb98e06d4d774595224525879c09bc6e98c40  # v2.20.1
         with:
@@ -46,45 +45,122 @@ jobs:
             ${{ env.CONNECTION_ALLOW_LIST }}
 
       - name: "Checkout repository"
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        # yamllint disable-line rule:line-length
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
 
-      # Perform setup prior to running test(s)
-      - name: "Testing setup step"
+      # The suite uses a fake client, so it needs neither credentials nor
+      # network access.
+      - name: "Run unit tests"
         shell: bash
         run: |
-          # Testing setup step
-          echo "Testing setup step"
-          echo "Testing setup step/summary output" >> "$GITHUB_STEP_SUMMARY"
+          # Run unit tests
+          python3 -m unittest discover -s tests -p "test_*.py" -v
 
-      - name: "Running local action: ${{ github.repository }}"
-        uses: ./
-        with:
-          input: "test input 💬"
-
-      - name: "Validated local action: ${{ github.repository }}"
-        shell: bash
-        env:
-          REPO: ${{ github.repository }}
-        run: |
-          # Local action validation
-          echo "Validated local action: $REPO"
-          echo "Validation step summary output" >> "$GITHUB_STEP_SUMMARY"
-
+  ### Input validation for the action wrapper ###
+  validation:
+    name: "Input validation"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 10
+    steps:
       # yamllint disable-line rule:line-length
-      - name: "Running local action: ${{ github.repository }} [Override Failure]"
+      - uses: lfreleng-actions/harden-runner-block-action@6db537b3e6d060c3287c5a3ce2c28b55b0af330d  # v0.2.1
+        with:
+          config: '@d43a857514f81ce2af4230aca16e179ef96148d8'  # v0.13.0
+
+      - name: "Harden runner (block)"
+        # yamllint disable-line rule:line-length
+        uses: step-security/harden-runner@b09bb98e06d4d774595224525879c09bc6e98c40  # v2.20.1
+        with:
+          egress-policy: 'block'
+          allowed-endpoints: >
+            ${{ env.CONNECTION_ALLOW_LIST }}
+
+      - name: "Checkout repository"
+        # yamllint disable-line rule:line-length
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: "Install uv"
+        # yamllint disable-line rule:line-length
+        uses: astral-sh/setup-uv@ae62891fec2bb8e7d6c99fc78c9fec3a63790f8d  # v10.0.0
+
+      # Failure testing is also important: an unknown mode must fail.
+      - name: "Reject an unknown mode [expected failure]"
+        id: badmode
         uses: ./
-        id: failure
         continue-on-error: true
         with:
-          invalid_input: "Some garbage"
+          mode: "publish"
+          rtd_token: "placeholder-not-used"
 
-      # Failure testing is also important
-      - name: "Error if step above did NOT fail"
-        if: steps.failure.outcome == 'success'
+      - name: "Error if the unknown mode did NOT fail"
+        if: steps.badmode.outcome == 'success'
         shell: bash
         run: |
-          # Error if step above did NOT fail
-          echo "Error: previous test step did NOT fail ❌"
+          # Error if the unknown mode did NOT fail
+          echo "Error: an unknown mode should fail the action ❌"
           exit 1
+
+      - name: "Reject an empty token [expected failure]"
+        id: notoken
+        uses: ./
+        continue-on-error: true
+        with:
+          mode: "verify"
+          rtd_token: ""
+
+      - name: "Error if the empty token did NOT fail"
+        if: steps.notoken.outcome == 'success'
+        shell: bash
+        run: |
+          # Error if the empty token did NOT fail
+          echo "Error: an empty token should fail the action ❌"
+          exit 1
+
+      - name: "Reject a non-numeric timeout [expected failure]"
+        id: badtimeout
+        uses: ./
+        continue-on-error: true
+        with:
+          mode: "verify"
+          rtd_token: "placeholder-not-used"
+          build_timeout: "soon"
+
+      - name: "Error if the invalid timeout did NOT fail"
+        if: steps.badtimeout.outcome == 'success'
+        shell: bash
+        run: |
+          # Error if the invalid timeout did NOT fail
+          echo "Error: a non-numeric timeout should fail the action ❌"
+          exit 1
+
+      # A change URL carrying no umbrella must fail before any API call.
+      - name: "Reject an underivable name [expected failure]"
+        id: badurl
+        uses: ./
+        continue-on-error: true
+        with:
+          mode: "verify"
+          rtd_token: "placeholder-not-used"
+          gerrit_project: "example"
+          gerrit_change_url: "not-a-url"
+
+      - name: "Error if the underivable name did NOT fail"
+        if: steps.badurl.outcome == 'success'
+        shell: bash
+        run: |
+          # Error if the underivable name did NOT fail
+          echo "Error: an underivable name should fail the action ❌"
+          exit 1
+
+      - name: "Report success"
+        shell: bash
+        run: |
+          # Report success
+          echo "All validation tests passed ✅"
+          echo "All validation tests passed ✅" >> "$GITHUB_STEP_SUMMARY"
