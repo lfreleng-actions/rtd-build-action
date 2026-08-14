@@ -36,9 +36,9 @@ steps:
     with:
       mode: "merge"
       rtd_token: ${{ secrets.RTD_TOKEN }}
-      gerrit_project: ${{ inputs.GERRIT_PROJECT }}
-      gerrit_change_url: ${{ inputs.GERRIT_CHANGE_URL }}
-      branch: ${{ inputs.GERRIT_BRANCH }}
+      gerrit_project: ${{ inputs.gerrit_project }}
+      gerrit_url: ${{ vars.GERRIT_URL }}
+      branch: ${{ inputs.gerrit_branch }}
 ```
 
 <!-- markdownlint-enable MD046 -->
@@ -53,8 +53,8 @@ A patchset check needs the mode change alone:
     with:
       mode: "verify"
       rtd_token: ${{ secrets.RTD_TOKEN }}
-      gerrit_project: ${{ inputs.GERRIT_PROJECT }}
-      gerrit_change_url: ${{ inputs.GERRIT_CHANGE_URL }}
+      gerrit_project: ${{ inputs.gerrit_project }}
+      gerrit_url: ${{ vars.GERRIT_URL }}
 ```
 
 <!-- markdownlint-enable MD046 -->
@@ -64,9 +64,11 @@ A patchset check needs the mode change alone:
 The action derives the ReadTheDocs slugs so a caller supplies nothing
 beyond the Gerrit values it already holds.
 
-The umbrella comes from the change URL host. A URL on
-`gerrit.onap.org` yields `onap`, one on `gerrit.o-ran-sc.org` yields
-`o-ran-sc`, and one on `git.opendaylight.org` yields `opendaylight`.
+The umbrella comes from the Gerrit host. A `gerrit_url` of
+`https://gerrit.onap.org/r` yields `onap`, one on `gerrit.o-ran-sc.org`
+yields `o-ran-sc`, and one on `git.opendaylight.org` yields
+`opendaylight`. Where `gerrit_url` stays empty the action reads the same
+host from `gerrit_change_url` instead.
 
 | Value            | Derivation                                         |
 | ---------------- | -------------------------------------------------- |
@@ -114,12 +116,17 @@ its default branch as `latest`, so the action keeps the two apart.
 ## Creating a project
 
 When the merge lane finds no project it creates one, which needs a
-repository URL. A Gerrit change URL points at a review rather than a
-repository, so recording it would leave the new project unable to clone
-anything.
+repository URL. The action prefers `gerrit_url`, which already addresses
+the Gerrit repository root, so the project path appends directly:
 
-The action derives the repository URL from the same host instead, taking
-the review path that precedes the `/c/` segment:
+```text
+https://gerrit.onap.org/r  +  cps  ->  https://gerrit.onap.org/r/cps
+```
+
+Given `gerrit_change_url` alone, the action derives the same result
+from the review path preceding the `/c/` segment. A change URL
+points at a review rather than a repository, so recording it would leave
+the new project unable to clone anything:
 
 <!-- markdownlint-disable MD013 -->
 
@@ -130,9 +137,9 @@ the review path that precedes the `/c/` segment:
 
 <!-- markdownlint-enable MD013 -->
 
-Set `repository_url` to override the derivation. Where the change URL
-carries no review path and no override arrives, the action stops with an
-explanation rather than recording an address that cannot work.
+Set `repository_url` to override both. Where neither Gerrit URL arrives
+and no override does either, the action stops with an explanation rather
+than recording an address that cannot work.
 
 ## Inputs
 
@@ -143,7 +150,8 @@ explanation rather than recording an address that cannot work.
 | `mode`              | True     |           | Lane to run: `verify` or `merge`                             |
 | `rtd_token`         | True     |           | ReadTheDocs API token                                        |
 | `gerrit_project`    | False    |           | Gerrit project path, e.g. `cps` or `cps/ncmp-dmi-plugin`     |
-| `gerrit_change_url` | False    |           | Gerrit change URL; supplies the umbrella name                |
+| `gerrit_url`        | False    |           | Gerrit server URL; preferred source for both derivations     |
+| `gerrit_change_url` | False    |           | Gerrit change URL; used when `gerrit_url` stays empty        |
 | `branch`            | False    |           | Branch under change                                          |
 | `default_branch`    | False    |           | Branch published as the default version; empty accepts both  |
 | `project`           | False    |           | ReadTheDocs project slug; empty derives one                  |

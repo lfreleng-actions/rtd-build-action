@@ -28,12 +28,16 @@ from lib.rtd_naming import (  # noqa: E402 - path set above
     parse_overrides,
     project_slug,
     repository_url_from,
+    repository_url_from_change,
+    repository_url_from_server,
     slugify,
+    umbrella_from,
     umbrella_from_url,
 )
 
 ONAP_URL = "https://gerrit.onap.org/r/c/cps/+/141234"
 ORAN_URL = "https://gerrit.o-ran-sc.org/r/c/ric-plt/+/9999"
+ONAP_SERVER = "https://gerrit.onap.org/r"
 
 
 @final
@@ -126,6 +130,7 @@ def fast(
     *,
     mode: str = MODE_VERIFY,
     gerrit_project: str = "cps",
+    gerrit_url: str = "",
     gerrit_change_url: str = ONAP_URL,
     branch: str = "master",
     default_branch: str = "",
@@ -139,6 +144,7 @@ def fast(
     return Settings(
         mode=mode,
         gerrit_project=gerrit_project,
+        gerrit_url=gerrit_url,
         gerrit_change_url=gerrit_change_url,
         branch=branch,
         default_branch=default_branch,
@@ -182,10 +188,31 @@ class UmbrellaDerivation(unittest.TestCase):
             umbrella_from_url("https://git.opendaylight.org/gerrit/x"), "opendaylight"
         )
 
+    def test_derives_from_server_urls(self) -> None:
+        """The server URL carries the same host as a change URL."""
+        self.assertEqual(umbrella_from_url(ONAP_SERVER), "onap")
+        self.assertEqual(umbrella_from_url("https://gerrit.o-ran-sc.org/r"), "o-ran-sc")
+
+    def test_tolerates_a_bare_host(self) -> None:
+        self.assertEqual(umbrella_from_url("gerrit.onap.org"), "onap")
+
     def test_rejects_unusable_values(self) -> None:
         for value in ("", "   ", "localhost"):
             with self.assertRaises(NamingError):
                 _ = umbrella_from_url(value)
+
+    def test_prefers_the_server_url(self) -> None:
+        """Where both arrive, the server URL wins."""
+        self.assertEqual(
+            umbrella_from("https://gerrit.example.org/r", ONAP_URL), "example"
+        )
+
+    def test_falls_back_to_the_change_url(self) -> None:
+        self.assertEqual(umbrella_from("", ONAP_URL), "onap")
+
+    def test_rejects_two_empty_sources(self) -> None:
+        with self.assertRaises(NamingError):
+            _ = umbrella_from("", "")
 
     def test_project_slug_joins_nested_paths(self) -> None:
         self.assertEqual(
@@ -448,16 +475,29 @@ class OtherConsumers(unittest.TestCase):
 class RepositoryUrl(unittest.TestCase):
     """A new project records a clonable URL, not a review URL."""
 
+    def test_joins_the_server_url_and_project(self) -> None:
+        """The server URL already addresses the repository root."""
+        self.assertEqual(
+            repository_url_from_server(ONAP_SERVER, "cps"),
+            "https://gerrit.onap.org/r/cps",
+        )
+
+    def test_tolerates_a_trailing_slash(self) -> None:
+        self.assertEqual(
+            repository_url_from_server("https://gerrit.onap.org/r/", "cps"),
+            "https://gerrit.onap.org/r/cps",
+        )
+
     def test_derives_from_an_onap_change_url(self) -> None:
         self.assertEqual(
-            repository_url_from(ONAP_URL, "cps"),
+            repository_url_from_change(ONAP_URL, "cps"),
             "https://gerrit.onap.org/r/cps",
         )
 
     def test_derives_from_an_opendaylight_change_url(self) -> None:
         """OpenDaylight serves reviews under a different path prefix."""
         self.assertEqual(
-            repository_url_from(
+            repository_url_from_change(
                 "https://git.opendaylight.org/gerrit/c/docs/+/1", "docs"
             ),
             "https://git.opendaylight.org/gerrit/docs",
@@ -465,19 +505,46 @@ class RepositoryUrl(unittest.TestCase):
 
     def test_keeps_a_nested_project_path(self) -> None:
         self.assertEqual(
-            repository_url_from(ONAP_URL, "cps/ncmp-dmi-plugin"),
+            repository_url_from_change(ONAP_URL, "cps/ncmp-dmi-plugin"),
             "https://gerrit.onap.org/r/cps/ncmp-dmi-plugin",
         )
 
     def test_rejects_a_url_with_no_review_segment(self) -> None:
         with self.assertRaises(NamingError):
-            _ = repository_url_from("https://gerrit.onap.org/", "cps")
+            _ = repository_url_from_change("https://gerrit.onap.org/", "cps")
+
+    def test_prefers_the_server_url(self) -> None:
+        """Joining the server URL needs no knowledge of review layout."""
+        self.assertEqual(
+            repository_url_from(ONAP_SERVER, ONAP_URL, "cps"),
+            "https://gerrit.onap.org/r/cps",
+        )
+
+    def test_falls_back_to_the_change_url(self) -> None:
+        self.assertEqual(
+            repository_url_from("", ONAP_URL, "cps"),
+            "https://gerrit.onap.org/r/cps",
+        )
+
+    def test_rejects_two_empty_sources(self) -> None:
+        with self.assertRaises(NamingError):
+            _ = repository_url_from("", "", "cps")
 
     def test_creation_records_the_repository_not_the_change(self) -> None:
         client = FakeClient(projects={"onap-doc"})
         _ = run(fast(mode=MODE_MERGE), client)
         created = [c for c in client.calls if c.startswith("create:")]
         self.assertEqual(created, ["create:onap-cps"])
+        self.assertEqual(
+            client.repositories["onap-cps"], "https://gerrit.onap.org/r/cps"
+        )
+
+    def test_creation_from_a_server_url_alone(self) -> None:
+        """A caller following the org convention supplies gerrit_url only."""
+        client = FakeClient(projects={"onap-doc"})
+        settings = fast(mode=MODE_MERGE, gerrit_url=ONAP_SERVER, gerrit_change_url="")
+        outcome = run(settings, client)
+        self.assertEqual(outcome.project, "onap-cps")
         self.assertEqual(
             client.repositories["onap-cps"], "https://gerrit.onap.org/r/cps"
         )

@@ -27,6 +27,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--mode", default=MODE_VERIFY, choices=(MODE_VERIFY, MODE_MERGE)
     )
     _ = parser.add_argument("--gerrit-project", default="", help="Gerrit project path")
+    _ = parser.add_argument(
+        "--gerrit-url",
+        default="",
+        help="Gerrit server URL; preferred source for the umbrella and repository URL",
+    )
     _ = parser.add_argument("--gerrit-change-url", default="", help="Gerrit change URL")
     _ = parser.add_argument("--branch", default="", help="Branch under change")
     _ = parser.add_argument(
@@ -76,6 +81,7 @@ def settings_from(namespace: argparse.Namespace) -> tuple[Settings, ClientConfig
     settings = Settings(
         mode=text("mode"),
         gerrit_project=text("gerrit_project"),
+        gerrit_url=text("gerrit_url"),
         gerrit_change_url=text("gerrit_change_url"),
         branch=text("branch"),
         default_branch=text("default_branch"),

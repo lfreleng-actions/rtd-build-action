@@ -28,7 +28,12 @@ inputs:
     default: ""
   gerrit_change_url:
     # yamllint disable-line rule:line-length
-    description: "Gerrit change URL; supplies the umbrella name when the project inputs stay empty"
+    description: "Gerrit change URL; used when gerrit_url stays empty"
+    required: false
+    default: ""
+  gerrit_url:
+    # yamllint disable-line rule:line-length
+    description: "Gerrit server URL; preferred source for the umbrella name and repository URL"
     required: false
     default: ""
   branch:
@@ -192,6 +197,7 @@ runs:
       env:
         INPUT_MODE: ${{ inputs.mode }}
         INPUT_GERRIT_PROJECT: ${{ inputs.gerrit_project }}
+        INPUT_GERRIT_URL: ${{ inputs.gerrit_url }}
         INPUT_GERRIT_CHANGE_URL: ${{ inputs.gerrit_change_url }}
         INPUT_BRANCH: ${{ inputs.branch }}
         INPUT_DEFAULT_BRANCH: ${{ inputs.default_branch }}
@@ -232,6 +238,7 @@ runs:
         args=(
           --mode "$INPUT_MODE"
           --gerrit-project "$INPUT_GERRIT_PROJECT"
+          --gerrit-url "$INPUT_GERRIT_URL"
           --gerrit-change-url "$INPUT_GERRIT_CHANGE_URL"
           --branch "$INPUT_BRANCH"
           --default-branch "$INPUT_DEFAULT_BRANCH"

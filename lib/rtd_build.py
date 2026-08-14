@@ -29,7 +29,7 @@ from lib.rtd_naming import (
     project_slug,
     repository_url_from,
     slugify,
-    umbrella_from_url,
+    umbrella_from,
 )
 
 log = logging.getLogger(__name__)
@@ -62,6 +62,7 @@ class Settings:
 
     mode: str = MODE_VERIFY
     gerrit_project: str = ""
+    gerrit_url: str = ""
     gerrit_change_url: str = ""
     branch: str = ""
     default_branch: str = ""
@@ -140,7 +141,7 @@ def resolve_names(
             apply_overrides(slugify(settings.parent_project), overrides),
         )
 
-    umbrella = umbrella_from_url(settings.gerrit_change_url)
+    umbrella = umbrella_from(settings.gerrit_url, settings.gerrit_change_url)
 
     parent = settings.parent_project or parent_slug(umbrella, settings.parent_suffix)
     parent = apply_overrides(slugify(parent), overrides)
@@ -216,6 +217,7 @@ def ensure_project(
     # A change URL points at a review rather than a repository, so
     # recording it would leave the new project unable to clone anything.
     repository = settings.repository_url or repository_url_from(
+        settings.gerrit_url,
         settings.gerrit_change_url,
         settings.gerrit_project,
     )
