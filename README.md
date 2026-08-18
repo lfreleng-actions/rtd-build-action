@@ -70,11 +70,15 @@ yields `o-ran-sc`, and one on `git.opendaylight.org` yields
 `opendaylight`. Where `gerrit_url` stays empty the action reads the same
 host from `gerrit_change_url` instead.
 
-| Value            | Derivation                                         |
-| ---------------- | -------------------------------------------------- |
-| Project          | `<umbrella>-<gerrit project>`, joined with hyphens |
-| Umbrella project | `<umbrella>-<parent_suffix>`                       |
-| Version          | The branch name, slugified                         |
+<!-- markdownlint-disable MD013 -->
+
+| Value            | Derivation                                              |
+| ---------------- | ------------------------------------------------------- |
+| Project          | `<umbrella>-<gerrit project>`; see the slug rules below |
+| Umbrella project | `<umbrella>-<parent_suffix>`                            |
+| Version          | The branch name, slugified                              |
+
+<!-- markdownlint-enable MD013 -->
 
 Two automatic fallbacks handle an organisation that imported existing
 documentation, where the top-level docs sit under the bare umbrella name
@@ -91,6 +95,28 @@ needs configuration to benefit.
 Set `project` or `parent_project` to bypass derivation, or supply
 `project_overrides` as `from=to` pairs for a project following no
 derivable rule.
+
+## Project slugs and version slugs differ
+
+ReadTheDocs applies different rules to the two, so the action carries a
+slugifier for each.
+
+| Slug    | Admits                | Because                              |
+| ------- | --------------------- | ------------------------------------ |
+| Version | `[a-z0-9._-]`         | a version carries dots: `3.7.10`     |
+| Project | `[a-z0-9_-]`          | the project slug is a Django slug    |
+
+A project slug drops the dot a version slug keeps, and any run of
+hyphens left behind collapses:
+
+| Gerrit project        | Project slug               |
+| --------------------- | -------------------------- |
+| `cps`                 | `onap-cps`                 |
+| `cps/ncmp-dmi-plugin` | `onap-cps-ncmp-dmi-plugin` |
+| `.github`             | `onap-github`              |
+
+Reusing the version rules for a project name produced `onap-.github`,
+which the API rejects with HTTP 400.
 
 ## Branch names and version slugs
 
