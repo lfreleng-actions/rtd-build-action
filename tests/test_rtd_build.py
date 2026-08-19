@@ -27,6 +27,7 @@ from lib.rtd_naming import (  # noqa: E402 - path set above
     NamingError,
     parse_overrides,
     project_slug,
+    project_slugify,
     repository_url_from,
     repository_url_from_change,
     repository_url_from_server,
@@ -160,7 +161,7 @@ def fast(
 
 
 class Slugify(unittest.TestCase):
-    """Branch names convert to the slug Read the Docs stores."""
+    """Branch names convert to the VERSION slug Read the Docs stores."""
 
     def test_converts_slashes(self) -> None:
         self.assertEqual(slugify("maintenance/3.7.10"), "maintenance-3.7.10")
@@ -176,6 +177,66 @@ class Slugify(unittest.TestCase):
         for value in ("", "   ", "///"):
             with self.assertRaises(NamingError):
                 _ = slugify(value)
+
+
+class ProjectSlugify(unittest.TestCase):
+    """Project names follow stricter rules than versions.
+
+    A Read the Docs project slug is a Django slug field, so it admits no
+    dot. Reusing the version slugifier produced 'onap-.github' for the
+    Gerrit project '.github', which the API rejected with HTTP 400.
+    """
+
+    def test_drops_dots(self) -> None:
+        self.assertEqual(project_slugify("foo.bar"), "foo-bar")
+
+    def test_collapses_hyphen_runs_left_by_a_separator(self) -> None:
+        """'.github' prefixed by an umbrella yields a doubled hyphen."""
+        self.assertEqual(project_slugify("onap-.github"), "onap-github")
+
+    def test_trims_leading_and_trailing_hyphens(self) -> None:
+        self.assertEqual(project_slugify(".github"), "github")
+
+    def test_keeps_underscores_and_hyphens(self) -> None:
+        """Both are valid in a Django slug, so neither gets rewritten."""
+        self.assertEqual(project_slugify("a_b-c"), "a_b-c")
+
+    def test_lowercases(self) -> None:
+        self.assertEqual(project_slugify("Montreal"), "montreal")
+
+    def test_rejects_empty(self) -> None:
+        for value in ("", "   ", "..."):
+            with self.assertRaises(NamingError):
+                _ = project_slugify(value)
+
+    def test_versions_keep_the_dot_projects_do_not(self) -> None:
+        """The two slugifiers diverge, and each is right for its use."""
+        self.assertEqual(slugify("maintenance/3.7.10"), "maintenance-3.7.10")
+        self.assertEqual(project_slugify("maintenance/3.7.10"), "maintenance-3-7-10")
+
+
+class ProjectSlugForGerritProjects(unittest.TestCase):
+    """Derived project slugs, including the names already in service."""
+
+    def test_derives_the_dotted_project(self) -> None:
+        """The case that failed the ONAP merge lane."""
+        self.assertEqual(project_slug("onap", ".github"), "onap-github")
+
+    def test_leaves_established_names_untouched(self) -> None:
+        """Changing a derivation must not rename a live project."""
+        for project, expected in (
+            ("cps", "onap-cps"),
+            ("cps/ncmp-dmi-plugin", "onap-cps-ncmp-dmi-plugin"),
+            ("aai/aai-common", "onap-aai-aai-common"),
+            ("integration/csit", "onap-integration-csit"),
+            ("oom", "onap-oom"),
+        ):
+            with self.subTest(project=project):
+                self.assertEqual(project_slug("onap", project), expected)
+
+    def test_rejects_an_empty_project(self) -> None:
+        with self.assertRaises(NamingError):
+            _ = project_slug("onap", "  ")
 
 
 class UmbrellaDerivation(unittest.TestCase):
@@ -272,6 +333,45 @@ class NameResolution(unittest.TestCase):
         settings = fast(project_overrides="onap-cps=renamed")
         outcome = run(settings, client)
         self.assertEqual(outcome.project, "renamed")
+
+    def test_derives_a_dotted_gerrit_project(self) -> None:
+        """A project slug admits no dot; '.github' must not keep one."""
+        client = FakeClient(projects={"onap-github", "onap-doc"})
+        outcome = run(fast(gerrit_project=".github"), client)
+        self.assertEqual(outcome.project, "onap-github")
+
+    def test_a_dotted_override_source_matches(self) -> None:
+        """An override keyed on a dotted name reaches the project.
+
+        parse_overrides normalises both sides with the project rules, so
+        resolve_names must look up with the same rules. Normalising the
+        lookup with the version rules leaves the dot in place, the key
+        never matches, and the override silently does nothing.
+
+        An explicit input carries the dot as far as the lookup, which a
+        derived name cannot: project_slug has already removed it.
+        """
+        client = FakeClient(projects={"renamed", "onap-doc"})
+        settings = fast(
+            project="onap-.github",
+            parent_project="onap-doc",
+            project_overrides="onap-.github=renamed",
+        )
+        outcome = run(settings, client)
+        self.assertEqual(outcome.project, "renamed")
+
+    def test_an_explicit_dotted_project_normalises(self) -> None:
+        """An explicit input takes the project rules, not the version ones."""
+        client = FakeClient(projects={"onap-github", "custom-parent"})
+        settings = fast(project="onap-.github", parent_project="custom-parent")
+        outcome = run(settings, client)
+        self.assertEqual(outcome.project, "onap-github")
+
+    def test_a_dotted_parent_suffix_matches_the_docs_repo(self) -> None:
+        """The umbrella fallback compares with the project rules too."""
+        client = FakeClient(projects={"onap"})
+        outcome = run(fast(gerrit_project=".doc"), client)
+        self.assertEqual(outcome.project, "onap")
 
 
 class VerifyLane(unittest.TestCase):

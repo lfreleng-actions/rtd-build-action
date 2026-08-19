@@ -14,8 +14,16 @@ from __future__ import annotations
 import re
 from urllib.parse import urlparse
 
-#: Characters Read the Docs preserves verbatim in a slug.
+#: Characters Read the Docs preserves verbatim in a version slug. The
+#: dot survives because versions carry one: ``3.7.10`` must stay intact.
 _SLUG_KEEP = re.compile(r"[^a-z0-9._-]+")
+
+#: Characters Read the Docs preserves verbatim in a PROJECT slug, which
+#: is a Django slug field and so admits no dot.
+_PROJECT_KEEP = re.compile(r"[^a-z0-9_-]+")
+
+#: Runs of hyphens left behind once a separator gets replaced.
+_HYPHEN_RUN = re.compile(r"-{2,}")
 
 
 class NamingError(ValueError):
@@ -23,14 +31,17 @@ class NamingError(ValueError):
 
 
 def slugify(value: str) -> str:
-    """Convert a branch or project name into a Read the Docs slug.
+    """Convert a branch name into a Read the Docs VERSION slug.
 
     Read the Docs lowercases the value and replaces every character
     outside ``[a-z0-9._-]`` with a hyphen, so a branch named
-    ``maintenance/3.7.10`` becomes ``maintenance-3.7.10``.
+    ``maintenance/3.7.10`` becomes ``maintenance-3.7.10``. The dot
+    survives because a version carries one.
 
     Passing an unslugified name to the API produces a request path that
     does not resolve, so route every branch name through this function.
+
+    Project names follow different rules; see :func:`project_slugify`.
     """
     if not value or not value.strip():
         msg = "Cannot build a slug from an empty value"
@@ -39,6 +50,30 @@ def slugify(value: str) -> str:
     slug = _SLUG_KEEP.sub("-", value.strip().lower()).strip("-")
     if not slug:
         msg = f"Value {value!r} does not yield a usable slug"
+        raise NamingError(msg)
+    return slug
+
+
+def project_slugify(value: str) -> str:
+    """Convert a project name into a Read the Docs PROJECT slug.
+
+    A project slug is a Django slug field, which admits letters, digits,
+    underscores and hyphens. It admits no dot, so a Gerrit project such
+    as ``.github`` cannot reuse :func:`slugify`: that function keeps the
+    dot on purpose, for versions like ``3.7.10``, and the resulting
+    ``onap-.github`` draws HTTP 400 from the API.
+
+    Replacing a separator can leave a run of hyphens, as ``onap-.github``
+    would, so collapse those and trim the ends.
+    """
+    if not value or not value.strip():
+        msg = "Cannot build a project slug from an empty value"
+        raise NamingError(msg)
+
+    slug = _PROJECT_KEEP.sub("-", value.strip().lower())
+    slug = _HYPHEN_RUN.sub("-", slug).strip("-")
+    if not slug:
+        msg = f"Value {value!r} does not yield a usable project slug"
         raise NamingError(msg)
     return slug
 
@@ -70,8 +105,9 @@ def umbrella_from_url(url: str) -> str:
         raise NamingError(msg)
 
     # Drop the leading service label (gerrit, git) and the trailing
-    # public suffix, leaving the organisation label.
-    return slugify(labels[1])
+    # public suffix, leaving the organisation label. The umbrella feeds
+    # project slugs, so it follows the project rules.
+    return project_slugify(labels[1])
 
 
 def umbrella_from(gerrit_url: str, change_url: str) -> str:
@@ -183,14 +219,14 @@ def project_slug(umbrella: str, gerrit_project: str) -> str:
     if not gerrit_project.strip():
         msg = "Cannot build a project slug from an empty Gerrit project"
         raise NamingError(msg)
-    return slugify(f"{umbrella}-{gerrit_project}")
+    return project_slugify(f"{umbrella}-{gerrit_project}")
 
 
 def parent_slug(umbrella: str, suffix: str) -> str:
     """Build the slug of the umbrella documentation project."""
     if not suffix.strip():
-        return slugify(umbrella)
-    return slugify(f"{umbrella}-{suffix}")
+        return project_slugify(umbrella)
+    return project_slugify(f"{umbrella}-{suffix}")
 
 
 def parse_overrides(raw: str) -> dict[str, str]:
@@ -211,7 +247,7 @@ def parse_overrides(raw: str) -> dict[str, str]:
         if not source.strip() or not target.strip():
             msg = f"Both sides of a project override must carry a value: {item!r}"
             raise NamingError(msg)
-        overrides[slugify(source)] = slugify(target)
+        overrides[project_slugify(source)] = project_slugify(target)
     return overrides
 
 

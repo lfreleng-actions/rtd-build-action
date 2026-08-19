@@ -27,6 +27,7 @@ from lib.rtd_naming import (
     parent_slug,
     parse_overrides,
     project_slug,
+    project_slugify,
     repository_url_from,
     slugify,
     umbrella_from,
@@ -135,18 +136,22 @@ def resolve_names(
     """
     overrides = parse_overrides(settings.project_overrides)
 
+    # Every name below is a PROJECT name, so all of them normalise
+    # through project_slugify. Using the version rules here would keep a
+    # dot the API rejects, and would leave an override keyed on the
+    # project rules unable to match.
     if settings.project and settings.parent_project:
         return (
-            apply_overrides(slugify(settings.project), overrides),
-            apply_overrides(slugify(settings.parent_project), overrides),
+            apply_overrides(project_slugify(settings.project), overrides),
+            apply_overrides(project_slugify(settings.parent_project), overrides),
         )
 
     umbrella = umbrella_from(settings.gerrit_url, settings.gerrit_change_url)
 
     parent = settings.parent_project or parent_slug(umbrella, settings.parent_suffix)
-    parent = apply_overrides(slugify(parent), overrides)
+    parent = apply_overrides(project_slugify(parent), overrides)
     if not settings.parent_project and not client.project_exists(parent):
-        bare = slugify(umbrella)
+        bare = project_slugify(umbrella)
         if client.project_exists(bare):
             outcome.note(
                 f"Umbrella project {parent!r} is absent; using {bare!r} instead"
@@ -154,7 +159,7 @@ def resolve_names(
             parent = bare
 
     project = settings.project or project_slug(umbrella, settings.gerrit_project)
-    project = apply_overrides(slugify(project), overrides)
+    project = apply_overrides(project_slugify(project), overrides)
     if (
         not settings.project
         and project != parent
@@ -162,8 +167,10 @@ def resolve_names(
     ):
         # The umbrella's own documentation repository resolves to the
         # umbrella project rather than a separate one.
-        if slugify(settings.gerrit_project) == slugify(settings.parent_suffix):
-            bare = slugify(umbrella)
+        if project_slugify(settings.gerrit_project) == project_slugify(
+            settings.parent_suffix
+        ):
+            bare = project_slugify(umbrella)
             if client.project_exists(bare):
                 outcome.note(f"Project {project!r} is absent; using {bare!r} instead")
                 project = bare
