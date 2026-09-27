@@ -79,12 +79,6 @@ jobs:
           allowed-endpoints: >
             ${{ env.CONNECTION_ALLOW_LIST }}
 
-      - name: "Checkout repository"
-        # yamllint disable-line rule:line-length
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
-        with:
-          persist-credentials: false
-
       - name: "Install uv"
         # yamllint disable-line rule:line-length
         uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4  # v10.1.0
@@ -92,7 +86,7 @@ jobs:
       # Failure testing is also important: an unknown mode must fail.
       - name: "Reject an unknown mode [expected failure]"
         id: badmode
-        uses: ./
+        uses: $/
         continue-on-error: true
         with:
           mode: "publish"
@@ -108,7 +102,7 @@ jobs:
 
       - name: "Reject an empty token [expected failure]"
         id: notoken
-        uses: ./
+        uses: $/
         continue-on-error: true
         with:
           mode: "verify"
@@ -124,7 +118,7 @@ jobs:
 
       - name: "Reject a non-numeric timeout [expected failure]"
         id: badtimeout
-        uses: ./
+        uses: $/
         continue-on-error: true
         with:
           mode: "verify"
@@ -142,7 +136,7 @@ jobs:
       # A change URL carrying no umbrella must fail before any API call.
       - name: "Reject an underivable name [expected failure]"
         id: badurl
-        uses: ./
+        uses: $/
         continue-on-error: true
         with:
           mode: "verify"
