@@ -115,10 +115,31 @@ repos:
     hooks:
       - id: codespell
 
+  # Requires a mirror, primary repo lacks .pre-commit-hooks.yaml
+  #
+  # Configured in pyrightconfig.json, not pyproject.toml: .readthedocs.yml
+  # runs 'pip install .', which rejects this directory today but would
+  # try to build lib/ as a package once a root pyproject.toml exists.
+  # check-json rejects comments, so the settings are explained here:
+  # - pythonVersion 3.10: action.yaml runs lib/ with the runner's
+  #   preinstalled python3; 3.10 is the distro python3 on ubuntu-22.04,
+  #   the oldest GitHub-hosted Ubuntu image.
+  # - include lib, tests: all the Python code; keep in step with args.
+  # - typeCheckingMode recommended: the bare hook's default, kept.
+  # Scanned code imports only the standard library and lib/, so the
+  # bare hook resolves every import and runs on pre-commit.ci.
   - repo: https://github.com/DetachHead/basedpyright-prek-mirror
     rev: 706e6acebe9e88c2c28d1527d3085a14b11794c4  # frozen: 1.40.1
     hooks:
       - id: basedpyright
+        # Fail on warnings as well as errors.
+        args: [--warnings, lib, tests]
+        # Scan the directories above, not only the staged files.
+        pass_filenames: false
+        # Run even when no Python file is staged (config-only, deletions).
+        always_run: true
+        # Keep always_run from also firing at commit-msg.
+        stages: [pre-commit]
 
   - repo: https://github.com/lfreleng-actions/gha-workflow-linter
     rev: 0c582e431022f1c7004196fb4ea32744d1fe4843  # frozen: v1.7.0

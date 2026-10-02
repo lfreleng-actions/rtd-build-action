@@ -1,0 +1,6 @@
+{
+  "include": ["lib", "tests"],
+  "pythonVersion": "3.10",
+  "pythonPlatform": "All",
+  "typeCheckingMode": "recommended"
+}
