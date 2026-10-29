@@ -208,7 +208,7 @@ than recording an address that cannot work.
 | `project_created`    | Whether this run created the project                   |
 | `subproject_created` | Whether this run attached the project to its umbrella  |
 | `version_activated`  | Whether this run made a discovered version visible     |
-| `build_id`           | Identifier of the documentation build, when one ran    |
+| `build_id`           | Build that published the documentation, when one ran   |
 | `build_success`      | Whether the documentation build succeeded              |
 | `documentation_url`  | URL of the published documentation                     |
 | `outcome_json`       | Complete outcome as a JSON string                      |
@@ -235,8 +235,40 @@ resolve names
   -> activate a newly discovered version
 ```
 
-A failed build fails the action. Every step reports through the step
+A failed build fails the action and names the Read the Docs build page,
+where the build log explains why. Every step reports through the step
 summary and the `outcome_json` output.
+
+## Superseded builds
+
+Read the Docs keeps one build queue per version. Triggering a build
+cancels any queued or running build of the same version, so a build
+the action triggered can end cancelled through no fault of the change:
+a second merge landed moments later, or the repository's own webhook
+built the same merge.
+
+A cancellation says nothing about the documentation, so the action does
+not report it as a failure:
+
+<!-- markdownlint-disable MD013 -->
+
+| On cancellation                                  | The action                                  |
+| ------------------------------------------------ | ------------------------------------------- |
+| A newer build of the same version is running     | Follows that build and reports its result   |
+| No newer build is running                        | Triggers another build                      |
+| Read the Docs cancelled its third trigger too    | Fails, saying so                            |
+
+<!-- markdownlint-enable MD013 -->
+
+The limit applies to builds the action triggers, which load the API.
+Following a newer build polls it and nothing more. A burst of merges
+can supersede build after build, each containing the change, and the
+build timeout bounds that wait.
+
+A newer build checks out the branch after the merge under test, so its
+result covers that change too; `build_id` then names the build that
+published. The action never follows a build of another version, nor an
+older build, which cannot contain the merge.
 
 ## Testing
 
@@ -250,7 +282,8 @@ python3 -m unittest discover -s tests -p "test_*.py"
 Coverage spans slug conversion, umbrella derivation for three
 organisations, both fallbacks, the verify lane leaving the API untouched,
 project and subproject creation, landing-version handling, branch
-discovery, version activation and a failing build.
+discovery, version activation, a failing build and the handling of
+superseded builds.
 
 [lftools-uv]: https://github.com/lfreleng-actions/lftools-uv
 

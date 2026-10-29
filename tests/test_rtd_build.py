@@ -520,7 +520,6 @@ class SupersededBuilds(unittest.TestCase):
             running=running,
         )
 
-    @unittest.expectedFailure
     def test_follows_the_build_that_superseded_ours(self) -> None:
         client = self._client(
             {
@@ -535,7 +534,6 @@ class SupersededBuilds(unittest.TestCase):
         self.assertEqual(client.builds, [("onap-cps", "latest")])
         self.assertTrue(any("superseded" in note for note in outcome.notes))
 
-    @unittest.expectedFailure
     def test_follows_a_chain_of_supersessions(self) -> None:
         """A merge burst can supersede many builds; each contains the change.
 
@@ -553,7 +551,6 @@ class SupersededBuilds(unittest.TestCase):
         self.assertEqual(outcome.build_id, chain[-1])
         self.assertEqual(len(client.builds), 1)
 
-    @unittest.expectedFailure
     def test_reports_a_failure_of_the_superseding_build(self) -> None:
         client = self._client(
             {
@@ -565,7 +562,6 @@ class SupersededBuilds(unittest.TestCase):
         with self.assertRaisesRegex(ReadTheDocsError, "2000"):
             _ = run(fast(mode=MODE_MERGE), client)
 
-    @unittest.expectedFailure
     def test_triggers_again_when_nothing_newer_is_running(self) -> None:
         client = self._client({"1001": [build(1001, "cancelled", False)]})
         outcome = run(fast(mode=MODE_MERGE), client)
@@ -573,7 +569,6 @@ class SupersededBuilds(unittest.TestCase):
         self.assertEqual(outcome.build_id, "1002")
         self.assertEqual(len(client.builds), 2)
 
-    @unittest.expectedFailure
     def test_ignores_running_builds_of_other_versions(self) -> None:
         client = self._client(
             {"1001": [build(1001, "cancelled", False)]},
@@ -583,7 +578,6 @@ class SupersededBuilds(unittest.TestCase):
         self.assertEqual(outcome.build_id, "1002")
         self.assertNotIn("details:onap-cps/2000", client.calls)
 
-    @unittest.expectedFailure
     def test_ignores_running_builds_older_than_ours(self) -> None:
         """An older build predates our merge, so it cannot vouch for it."""
         client = self._client(
@@ -594,7 +588,6 @@ class SupersededBuilds(unittest.TestCase):
         self.assertEqual(outcome.build_id, "1002")
         self.assertNotIn("details:onap-cps/900", client.calls)
 
-    @unittest.expectedFailure
     def test_gives_up_after_repeated_cancellation(self) -> None:
         cancelled = [build(0, "cancelled", False)]
         client = self._client({str(n): list(cancelled) for n in range(1001, 1010)})
@@ -602,14 +595,12 @@ class SupersededBuilds(unittest.TestCase):
             _ = run(fast(mode=MODE_MERGE), client)
         self.assertEqual(len(client.builds), 3)
 
-    @unittest.expectedFailure
     def test_reads_the_state_object(self) -> None:
         """The v3 API reports state as an object, not a string."""
         client = self._client({"1001": [build(1001, "failed")]})
         with self.assertRaisesRegex(ReadTheDocsError, "1001.*failed"):
             _ = run(fast(mode=MODE_MERGE), client)
 
-    @unittest.expectedFailure
     def test_a_failure_links_the_build_page(self) -> None:
         client = self._client({"1001": [build(1001, "finished", False)]})
         with self.assertRaisesRegex(
@@ -617,7 +608,6 @@ class SupersededBuilds(unittest.TestCase):
         ):
             _ = run(fast(mode=MODE_MERGE), client)
 
-    @unittest.expectedFailure
     def test_triggers_nothing_once_the_timeout_passes(self) -> None:
         """A build triggered after the deadline would go unmonitored."""
         client = self._client({"1001": [build(1001, "cancelled", False)]})

@@ -119,7 +119,7 @@ outputs:
     description: "Whether this run made a discovered version visible"
     value: ${{ steps.build.outputs.version_activated }}
   build_id:
-    description: "Identifier of the documentation build, when one ran"
+    description: "Build that published the documentation, when one ran"
     value: ${{ steps.build.outputs.build_id }}
   build_success:
     description: "Whether the documentation build succeeded"

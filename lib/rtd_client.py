@@ -95,6 +95,10 @@ class SupportsReadTheDocs(Protocol):
         """Retrieve a build's details."""
         ...
 
+    def build_list(self, project: str) -> list[dict[str, object]]:
+        """List the builds Read the Docs has not yet finished."""
+        ...
+
     def subproject_list(self, project: str) -> list[str]:
         """List the subproject slugs attached to a project."""
         ...
@@ -242,6 +246,22 @@ class ReadTheDocsClient:
     def build_details(self, project: str, build_id: str) -> dict[str, object]:
         """Retrieve a build's details."""
         return self._run_object(["project-build-details", project, build_id])
+
+    def build_list(self, project: str) -> list[dict[str, object]]:
+        """List the builds Read the Docs has not yet finished.
+
+        The command asks the API for running builds only, which includes
+        queued ones: everything short of a final state.
+        """
+        payload = self._run_object(["project-build-list", project])
+        entries = payload.get("builds")
+        if not isinstance(entries, list):
+            return []
+        return [
+            cast("dict[str, object]", entry)
+            for entry in cast("list[object]", entries)
+            if isinstance(entry, dict)
+        ]
 
     # -- Subprojects ---------------------------------------------------------
 
