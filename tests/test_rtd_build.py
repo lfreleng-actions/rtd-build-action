@@ -13,6 +13,7 @@ import sys
 import unittest
 from pathlib import Path
 from typing import final
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -52,12 +53,19 @@ class FakeClient:
         versions: dict[tuple[str, str], bool] | None = None,
         default_versions: dict[str, str] | None = None,
         build_succeeds: bool = True,
+        build_script: dict[str, list[dict[str, object]]] | None = None,
+        running: list[dict[str, object]] | None = None,
     ) -> None:
         self.projects: set[str] = set(projects) if projects else set()
         self.subprojects: dict[str, list[str]] = dict(subprojects or {})
         self.versions: dict[tuple[str, str], bool] = dict(versions or {})
         self.default_versions: dict[str, str] = dict(default_versions or {})
         self.build_succeeds: bool = build_succeeds
+        # Successive build_details answers per build; the last repeats.
+        self.build_script: dict[str, list[dict[str, object]]] = dict(build_script or {})
+        self.running: list[dict[str, object]] = list(running or [])
+        # Successive build_list answers; once spent, running applies.
+        self.running_answers: list[list[dict[str, object]]] = []
         self.calls: list[str] = []
         self.builds: list[tuple[str, str]] = []
         self.repositories: dict[str, str] = {}
@@ -109,11 +117,21 @@ class FakeClient:
         return str(self._next_build)
 
     def build_details(self, project: str, build_id: str) -> dict[str, object]:
-        """Return a finished build, successful or otherwise."""
+        """Return the scripted state, else a finished build."""
         self.calls.append(f"details:{project}/{build_id}")
+        script = self.build_script.get(build_id)
+        if script:
+            return script.pop(0) if len(script) > 1 else script[0]
         if self.build_succeeds:
-            return {"id": build_id, "success": True, "state": "finished"}
-        return {"id": build_id, "success": False, "state": "failed"}
+            return {"id": build_id, "success": True, "state": {"code": "finished"}}
+        return {"id": build_id, "success": False, "state": {"code": "finished"}}
+
+    def build_list(self, project: str) -> list[dict[str, object]]:
+        """List the builds Read the Docs has not yet finished."""
+        self.calls.append(f"running:{project}")
+        if self.running_answers:
+            return self.running_answers.pop(0)
+        return list(self.running)
 
     def subproject_list(self, project: str) -> list[str]:
         """List the recorded subprojects of a project."""
@@ -459,6 +477,163 @@ class MergeLane(unittest.TestCase):
         )
         with self.assertRaises(ReadTheDocsError):
             _ = run(fast(mode=MODE_MERGE), client)
+
+
+def build(
+    build_id: int,
+    code: str,
+    success: bool | None = None,
+    version: str = "latest",
+) -> dict[str, object]:
+    """Describe a build the way the Read the Docs v3 API does."""
+    return {
+        "id": build_id,
+        "version": version,
+        "state": {"code": code, "name": code.title()},
+        "success": success,
+        "urls": {
+            "build": f"https://app.readthedocs.org/projects/onap-cps/builds/{build_id}/"
+        },
+    }
+
+
+class SupersededBuilds(unittest.TestCase):
+    """A cancelled build hands over to the build that replaced it.
+
+    Read the Docs keeps one queue per version and cancels a queued or
+    running build when another is triggered for the same version: a
+    second merge landing moments later, or the repository webhook firing
+    for the same merge. The newer build checks out the branch after our
+    merge, so its result speaks for our change too. Reporting the
+    cancellation as a failure turned every such overlap red.
+    """
+
+    def _client(
+        self,
+        script: dict[str, list[dict[str, object]]],
+        running: list[dict[str, object]] | None = None,
+    ) -> FakeClient:
+        return FakeClient(
+            projects={"onap-cps", "onap-doc"},
+            subprojects={"onap-doc": ["onap-cps"]},
+            build_script=script,
+            running=running,
+        )
+
+    @unittest.expectedFailure
+    def test_follows_the_build_that_superseded_ours(self) -> None:
+        client = self._client(
+            {
+                "1001": [build(1001, "cancelled", False)],
+                "2000": [build(2000, "building"), build(2000, "finished", True)],
+            },
+            running=[build(2000, "building")],
+        )
+        outcome = run(fast(mode=MODE_MERGE), client)
+        self.assertTrue(outcome.build_success)
+        self.assertEqual(outcome.build_id, "2000")
+        self.assertEqual(client.builds, [("onap-cps", "latest")])
+        self.assertTrue(any("superseded" in note for note in outcome.notes))
+
+    @unittest.expectedFailure
+    def test_follows_a_chain_of_supersessions(self) -> None:
+        """A merge burst can supersede many builds; each contains the change.
+
+        Following polls without triggering, so it never counts against
+        the trigger limit.
+        """
+        chain = [str(n) for n in range(2000, 2005)]
+        script = {"1001": [build(1001, "cancelled", False)]}
+        script |= {n: [build(int(n), "cancelled", False)] for n in chain[:-1]}
+        script[chain[-1]] = [build(int(chain[-1]), "finished", True)]
+        client = self._client(script)
+        client.running_answers = [[build(int(n), "building")] for n in chain]
+        outcome = run(fast(mode=MODE_MERGE), client)
+        self.assertTrue(outcome.build_success)
+        self.assertEqual(outcome.build_id, chain[-1])
+        self.assertEqual(len(client.builds), 1)
+
+    @unittest.expectedFailure
+    def test_reports_a_failure_of_the_superseding_build(self) -> None:
+        client = self._client(
+            {
+                "1001": [build(1001, "cancelled", False)],
+                "2000": [build(2000, "finished", False)],
+            },
+            running=[build(2000, "building")],
+        )
+        with self.assertRaisesRegex(ReadTheDocsError, "2000"):
+            _ = run(fast(mode=MODE_MERGE), client)
+
+    @unittest.expectedFailure
+    def test_triggers_again_when_nothing_newer_is_running(self) -> None:
+        client = self._client({"1001": [build(1001, "cancelled", False)]})
+        outcome = run(fast(mode=MODE_MERGE), client)
+        self.assertTrue(outcome.build_success)
+        self.assertEqual(outcome.build_id, "1002")
+        self.assertEqual(len(client.builds), 2)
+
+    @unittest.expectedFailure
+    def test_ignores_running_builds_of_other_versions(self) -> None:
+        client = self._client(
+            {"1001": [build(1001, "cancelled", False)]},
+            running=[build(2000, "building", version="maintenance-3.7.10")],
+        )
+        outcome = run(fast(mode=MODE_MERGE), client)
+        self.assertEqual(outcome.build_id, "1002")
+        self.assertNotIn("details:onap-cps/2000", client.calls)
+
+    @unittest.expectedFailure
+    def test_ignores_running_builds_older_than_ours(self) -> None:
+        """An older build predates our merge, so it cannot vouch for it."""
+        client = self._client(
+            {"1001": [build(1001, "cancelled", False)]},
+            running=[build(900, "building")],
+        )
+        outcome = run(fast(mode=MODE_MERGE), client)
+        self.assertEqual(outcome.build_id, "1002")
+        self.assertNotIn("details:onap-cps/900", client.calls)
+
+    @unittest.expectedFailure
+    def test_gives_up_after_repeated_cancellation(self) -> None:
+        cancelled = [build(0, "cancelled", False)]
+        client = self._client({str(n): list(cancelled) for n in range(1001, 1010)})
+        with self.assertRaisesRegex(ReadTheDocsError, "cancelled"):
+            _ = run(fast(mode=MODE_MERGE), client)
+        self.assertEqual(len(client.builds), 3)
+
+    @unittest.expectedFailure
+    def test_reads_the_state_object(self) -> None:
+        """The v3 API reports state as an object, not a string."""
+        client = self._client({"1001": [build(1001, "failed")]})
+        with self.assertRaisesRegex(ReadTheDocsError, "1001.*failed"):
+            _ = run(fast(mode=MODE_MERGE), client)
+
+    @unittest.expectedFailure
+    def test_a_failure_links_the_build_page(self) -> None:
+        client = self._client({"1001": [build(1001, "finished", False)]})
+        with self.assertRaisesRegex(
+            ReadTheDocsError, "app.readthedocs.org/projects/onap-cps/builds/1001/"
+        ):
+            _ = run(fast(mode=MODE_MERGE), client)
+
+    @unittest.expectedFailure
+    def test_triggers_nothing_once_the_timeout_passes(self) -> None:
+        """A build triggered after the deadline would go unmonitored."""
+        client = self._client({"1001": [build(1001, "cancelled", False)]})
+        clock = [0.0]
+
+        def listed(_project: str) -> list[dict[str, object]]:
+            clock[0] = 60.0  # the request returned after the build timeout
+            return []
+
+        with (
+            mock.patch("time.monotonic", side_effect=lambda: clock[0]),
+            mock.patch.object(client, "build_list", side_effect=listed),
+            self.assertRaisesRegex(ReadTheDocsError, "no time left"),
+        ):
+            _ = run(fast(mode=MODE_MERGE), client)
+        self.assertEqual(len(client.builds), 1)
 
 
 class SlashedBranches(unittest.TestCase):
