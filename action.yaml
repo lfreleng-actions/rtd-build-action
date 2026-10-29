@@ -258,6 +258,12 @@ runs:
           --lftools-version "$INPUT_LFTOOLS_VERSION"
         )
 
+        # Run the helpers from the action's own directory: python3 -m
+        # puts the working directory ahead of PYTHONPATH, so from the
+        # caller's workspace a lib/ or json.py there would be imported
+        # instead. Nothing here reads the workspace.
+        cd "$ACTION_PATH" || exit 1
+
         outcome="$(PYTHONPATH="${ACTION_PATH}" \
           python3 -m lib.cli "${args[@]}")"
         status=$?
