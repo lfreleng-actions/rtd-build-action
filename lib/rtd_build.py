@@ -92,6 +92,7 @@ class Outcome:
     version_activated: bool = False
     build_id: str = ""
     build_success: bool = False
+    cancelled_builds: int = 0
     documentation_url: str = ""
     notes: list[str] = field(default_factory=list)
 
@@ -114,6 +115,7 @@ class Outcome:
             "version_activated": self.version_activated,
             "build_id": self.build_id,
             "build_success": self.build_success,
+            "cancelled_builds": self.cancelled_builds,
             "documentation_url": self.documentation_url,
             "notes": self.notes,
         }
@@ -185,7 +187,9 @@ def wait_for_build(
 ) -> None:
     """Build a version and record the build that published it."""
     polling = Polling(timeout=settings.build_timeout, interval=settings.poll_interval)
-    outcome.build_id = publish(client, Target(project, version), polling, outcome.note)
+    published = publish(client, Target(project, version), polling, outcome.note)
+    outcome.build_id = published.build_id
+    outcome.cancelled_builds += published.cancelled
     outcome.build_success = True
 
 

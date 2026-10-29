@@ -43,6 +43,9 @@ def property_rows(outcome: dict[str, object]) -> list[str]:
     build_id = flatten(text_of(outcome, "build_id"))
     if build_id:
         rows.append(f"| Build | `{build_id}` ({flag(outcome, 'build_success')}) |")
+    cancelled = outcome.get("cancelled_builds")
+    if isinstance(cancelled, int) and not isinstance(cancelled, bool) and cancelled:
+        rows.append(f"| Cancelled builds | {cancelled} |")
     rows.append("")
     return rows
 

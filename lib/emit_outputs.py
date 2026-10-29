@@ -26,6 +26,7 @@ SCALAR_KEYS = (
     "version_activated",
     "build_id",
     "build_success",
+    "cancelled_builds",
     "documentation_url",
 )
 

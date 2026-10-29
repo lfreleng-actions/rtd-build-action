@@ -36,13 +36,11 @@ from lib.rtd_naming import (  # noqa: E402 - path set above
     umbrella_from,
     umbrella_from_url,
 )
+from lib.rtd_wait import MAX_FOLLOWS  # noqa: E402 - path set above
 
 ONAP_URL = "https://gerrit.onap.org/r/c/cps/+/141234"
 ORAN_URL = "https://gerrit.o-ran-sc.org/r/c/ric-plt/+/9999"
 ONAP_SERVER = "https://gerrit.onap.org/r"
-
-#: Superseding builds the merge lane follows before giving up.
-MAX_FOLLOWS = 10
 
 
 @final
@@ -656,7 +654,6 @@ class SupersededBuilds(unittest.TestCase):
             client.running_answers.append([build(2000 + follows, "building")])
         return client
 
-    @unittest.expectedFailure
     def test_stops_following_after_the_follow_limit(self) -> None:
         """An endless chain of supersessions must not poll until timeout."""
         client = self._chain(MAX_FOLLOWS, ends_in_success=False)
@@ -667,7 +664,6 @@ class SupersededBuilds(unittest.TestCase):
             _ = run(fast(mode=MODE_MERGE), client)
         self.assertEqual(len(client.builds), 1)
 
-    @unittest.expectedFailure
     def test_follows_up_to_the_follow_limit(self) -> None:
         client = self._chain(MAX_FOLLOWS, ends_in_success=True)
         outcome = run(fast(mode=MODE_MERGE), client)
@@ -687,7 +683,6 @@ class CancelledBuildCount(unittest.TestCase):
             build_script=script,
         )
 
-    @unittest.expectedFailure
     def test_counts_a_followed_cancellation(self) -> None:
         client = self._client({"1001": [build(1001, "cancelled", False)]})
         client.running_answers = [[build(2000, "building")]]
@@ -695,14 +690,12 @@ class CancelledBuildCount(unittest.TestCase):
         self.assertEqual(outcome.build_id, "2000")
         self.assertEqual(outcome.as_dict()["cancelled_builds"], 1)
 
-    @unittest.expectedFailure
     def test_counts_a_retriggered_cancellation(self) -> None:
         client = self._client({"1001": [build(1001, "cancelled", False)]})
         outcome = run(fast(mode=MODE_MERGE), client)
         self.assertEqual(outcome.build_id, "1002")
         self.assertEqual(outcome.as_dict()["cancelled_builds"], 1)
 
-    @unittest.expectedFailure
     def test_counts_follows_and_retriggers_together(self) -> None:
         client = self._client(
             {
@@ -716,13 +709,11 @@ class CancelledBuildCount(unittest.TestCase):
         self.assertEqual(len(client.builds), 2)
         self.assertEqual(outcome.as_dict()["cancelled_builds"], 2)
 
-    @unittest.expectedFailure
     def test_reports_zero_without_cancellation(self) -> None:
         outcome = run(fast(mode=MODE_MERGE), self._client({}))
         self.assertTrue(outcome.build_success)
         self.assertEqual(outcome.as_dict()["cancelled_builds"], 0)
 
-    @unittest.expectedFailure
     def test_emits_the_count_as_an_output(self) -> None:
         from lib.emit_outputs import render  # noqa: PLC0415
 
@@ -991,7 +982,6 @@ class Rendering(unittest.TestCase):
         rows = property_rows({"build_id": "1001", "cancelled_builds": 0})
         self.assertFalse(any("Cancelled" in row for row in rows))
 
-    @unittest.expectedFailure
     def test_shows_the_cancellation_row_when_some_occurred(self) -> None:
         from lib.render_summary import property_rows  # noqa: PLC0415
 
