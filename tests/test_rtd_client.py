@@ -55,7 +55,6 @@ class TransientFailures(unittest.TestCase):
         runner = cast("mock.MagicMock", subprocess.run)
         return ReadTheDocsClient(), waits, runner
 
-    @unittest.expectedFailure
     def test_retries_a_throttled_read_after_the_hint(self) -> None:
         client, waits, runner = self._client(
             failed(THROTTLED.format(7)), answered('{"id": 35}')
@@ -64,7 +63,6 @@ class TransientFailures(unittest.TestCase):
         self.assertEqual(waits, [8])
         self.assertEqual(runner.call_count, 2)
 
-    @unittest.expectedFailure
     def test_retries_a_throttled_trigger(self) -> None:
         """A throttled request never ran, so even a trigger repeats safely."""
         client, _, runner = self._client(
@@ -73,7 +71,6 @@ class TransientFailures(unittest.TestCase):
         self.assertEqual(client.build_trigger("onap-cps", "latest"), "36")
         self.assertEqual(runner.call_count, 2)
 
-    @unittest.expectedFailure
     def test_caps_a_long_hint(self) -> None:
         client, waits, _ = self._client(
             failed(THROTTLED.format(600)), answered('{"id": 35}')
@@ -81,7 +78,6 @@ class TransientFailures(unittest.TestCase):
         _ = client.build_details("onap-cps", "35")
         self.assertEqual(waits, [60])
 
-    @unittest.expectedFailure
     def test_retries_a_server_error_on_a_read(self) -> None:
         client, waits, runner = self._client(
             failed(SERVER_ERROR), answered('{"subprojects": ["onap-cps"]}')
@@ -104,7 +100,6 @@ class TransientFailures(unittest.TestCase):
             _ = client.project_create("onap-cps", "https://gerrit.onap.org/r/cps", "")
         self.assertEqual(runner.call_count, 1)
 
-    @unittest.expectedFailure
     def test_gives_up_after_five_attempts(self) -> None:
         client, waits, runner = self._client(
             *[failed(THROTTLED.format(1)) for _ in range(5)]
@@ -121,6 +116,28 @@ class TransientFailures(unittest.TestCase):
         with self.assertRaisesRegex(ReadTheDocsError, "HTTP 400"):
             _ = client.build_trigger("onap-cps", "latest")
         self.assertEqual(runner.call_count, 1)
+
+    def test_stops_retrying_a_trigger_at_the_deadline(self) -> None:
+        """A trigger landing after the deadline would go unmonitored."""
+        client, waits, runner = self._client(
+            failed(THROTTLED.format(10)), answered('{"build": {"id": 36}}')
+        )
+        with (
+            mock.patch("time.monotonic", return_value=100.0),
+            self.assertRaisesRegex(ReadTheDocsError, "HTTP 429"),
+        ):
+            _ = client.build_trigger("onap-cps", "latest", deadline=105.0)
+        self.assertEqual(runner.call_count, 1)
+        self.assertEqual(waits, [])
+
+    def test_retries_a_trigger_within_the_deadline(self) -> None:
+        client, waits, _ = self._client(
+            failed(THROTTLED.format(10)), answered('{"build": {"id": 36}}')
+        )
+        with mock.patch("time.monotonic", return_value=100.0):
+            build_id = client.build_trigger("onap-cps", "latest", deadline=200.0)
+        self.assertEqual(build_id, "36")
+        self.assertEqual(waits, [11])
 
 
 if __name__ == "__main__":

@@ -629,7 +629,6 @@ class SupersededBuilds(unittest.TestCase):
             _ = run(fast(mode=MODE_MERGE), client)
         self.assertEqual(len(client.builds), 1)
 
-    @unittest.expectedFailure
     def test_bounds_every_trigger_by_the_deadline(self) -> None:
         """API retries inside a trigger must not outlast the build timeout."""
         client = self._client({"1001": [build(1001, "cancelled", False)]})

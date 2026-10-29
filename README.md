@@ -270,10 +270,29 @@ result covers that change too; `build_id` then names the build that
 published. The action never follows a build of another version, nor an
 older build, which cannot contain the merge.
 
+## Transient API failures
+
+The API throttles bursts of requests with HTTP 429, which a wave of
+merges across ONAP projects readily triggers, and now and then answers
+with a server error. Neither says anything about the documentation, so
+the action repeats the request, up to five attempts in all:
+
+- **HTTP 429**: any request repeats after the wait Read the Docs names,
+  capped at 60 seconds. Even a build trigger can repeat, because a
+  throttled request never reached the handler.
+- **HTTP 5xx**: a request repeats when running it twice leaves the same
+  result: reads, and updates that set a fixed value. Creating a project
+  or subproject, or triggering a build, may already have taken effect,
+  and the action reports the error instead.
+
+Any other failure stops the action at once. Nor does a build trigger
+retry past the build timeout: a build started after the action stops
+watching would publish unmonitored.
+
 ## Testing
 
-The suite runs against a fake client, so it needs no credentials and no
-network access:
+The suite runs against a fake client and a stubbed command line, so it
+needs no credentials and no network access:
 
 ```bash
 python3 -m unittest discover -s tests -p "test_*.py"
@@ -282,8 +301,8 @@ python3 -m unittest discover -s tests -p "test_*.py"
 Coverage spans slug conversion, umbrella derivation for three
 organisations, both fallbacks, the verify lane leaving the API untouched,
 project and subproject creation, landing-version handling, branch
-discovery, version activation, a failing build and the handling of
-superseded builds.
+discovery, version activation, a failing build, the handling of
+superseded builds and the retrying of transient API failures.
 
 [lftools-uv]: https://github.com/lfreleng-actions/lftools-uv
 

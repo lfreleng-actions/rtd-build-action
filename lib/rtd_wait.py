@@ -146,7 +146,7 @@ def publish(
     """
     where = f"{target.project}/{target.version}"
     deadline = time.monotonic() + polling.timeout
-    build_id = client.build_trigger(target.project, target.version)
+    build_id = client.build_trigger(target.project, target.version, deadline)
     triggered = 1
     note(f"Triggered build {build_id} of {where}")
 
@@ -189,6 +189,6 @@ def publish(
             )
             raise ReadTheDocsError(msg)
 
-        build_id = client.build_trigger(target.project, target.version)
+        build_id = client.build_trigger(target.project, target.version, deadline)
         triggered += 1
         note(f"Build was cancelled with no newer build running; triggered {build_id}")
