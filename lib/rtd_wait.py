@@ -33,10 +33,15 @@ _CANCELLED = "cancelled"
 #: the API for the whole build timeout.
 #:
 #: Following a newer build never counts against this bound. Each one
-#: was triggered after ours and so contains the change, a burst of
-#: merges can supersede several in a row, and following one only
-#: polls: the build timeout bounds that wait however long the chain.
+#: was triggered after ours and so contains the change, and a burst of
+#: merges can supersede several in a row: capping follows here would
+#: fail a change that published.
 MAX_TRIGGERS = 3
+
+#: Newer builds the merge lane follows before giving up. Following only
+#: polls, so this bound sits well above a real merge burst; it stops a
+#: chain that never settles from polling until the build timeout.
+MAX_FOLLOWS = 10
 
 
 @dataclass(frozen=True)
@@ -53,6 +58,14 @@ class Target:
 
     project: str
     version: str
+
+
+@dataclass(frozen=True)
+class Published:
+    """The build that published a change, and the cancellations before it."""
+
+    build_id: str
+    cancelled: int = 0
 
 
 def build_state(details: dict[str, object]) -> str:
@@ -134,20 +147,23 @@ def publish(
     target: Target,
     polling: Polling,
     note: Callable[[str], None],
-) -> str:
-    """Trigger a build and return the identifier of the one that published.
+) -> Published:
+    """Trigger a build and report the one that published.
 
     Read the Docs cancels a queued or running build when another is
     triggered for the same version, whether by a merge landing moments
     later or by the repository webhook firing for the same merge. A
     cancellation therefore says nothing about the documentation: this
     follows the build that superseded ours and reports its result, and
-    triggers again only when no newer build is running.
+    triggers again only when no newer build is running. Triggers and
+    follows each have their own limit, and every cancellation counts.
     """
     where = f"{target.project}/{target.version}"
     deadline = time.monotonic() + polling.timeout
     build_id = client.build_trigger(target.project, target.version, deadline)
     triggered = 1
+    followed = 0
+    cancelled = 0
     note(f"Triggered build {build_id} of {where}")
 
     while True:
@@ -155,7 +171,7 @@ def publish(
 
         if details.get("success") is True:
             note(f"Build {build_id} completed successfully")
-            return build_id
+            return Published(build_id, cancelled)
 
         if build_state(details) != _CANCELLED:
             page = build_page(details)
@@ -163,13 +179,23 @@ def publish(
             msg = f"Read the Docs build {build_id} of {where} failed{suffix}"
             raise ReadTheDocsError(msg)
 
+        cancelled += 1
         newer = superseding_build(client, target, build_id)
         if newer:
+            if followed >= MAX_FOLLOWS:
+                msg = (
+                    f"Read the Docs kept superseding builds of {where}: followed "
+                    + f"{followed} newer builds, and build {build_id}, the last, "
+                    + f"was cancelled in favour of build {newer}. This is not a "
+                    + "documentation failure"
+                )
+                raise ReadTheDocsError(msg)
             note(
                 f"Build {build_id} was cancelled; build {newer} superseded it, "
                 + "so its result stands for this change"
             )
             build_id = newer
+            followed += 1
             continue
 
         if triggered >= MAX_TRIGGERS:

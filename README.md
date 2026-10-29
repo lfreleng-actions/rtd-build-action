@@ -210,6 +210,7 @@ than recording an address that cannot work.
 | `version_activated`  | Whether this run made a discovered version visible     |
 | `build_id`           | Build that published the documentation, when one ran   |
 | `build_success`      | Whether the documentation build succeeded              |
+| `cancelled_builds`   | Builds Read the Docs cancelled during this run         |
 | `documentation_url`  | URL of the published documentation                     |
 | `outcome_json`       | Complete outcome as a JSON string                      |
 
@@ -256,14 +257,24 @@ not report it as a failure:
 | ------------------------------------------------ | ------------------------------------------- |
 | A newer build of the same version is running     | Follows that build and reports its result   |
 | No newer build is running                        | Triggers another build                      |
-| Read the Docs cancelled its third trigger too    | Fails, saying so                            |
+| No newer build is running after three triggers   | Fails, saying so                            |
+| A newer build is running after ten follows       | Fails, naming the follow count and build    |
 
 <!-- markdownlint-enable MD013 -->
 
-The limit applies to builds the action triggers, which load the API.
-Following a newer build polls it and nothing more. A burst of merges
-can supersede build after build, each containing the change, and the
-build timeout bounds that wait.
+Each limit counts its own kind of build. The action triggers at most
+three builds, since each trigger loads the API. Following a newer
+build polls it and nothing more, and a burst of merges can supersede
+build after build, each containing the change, so follows have a
+separate and larger limit of ten. Neither counts against the other, and
+the build timeout bounds the whole wait. The follow limit applies when
+there is a newer build to follow: when a followed build ends cancelled
+with nothing newer running, the action triggers again within its
+trigger limit.
+
+The `cancelled_builds` output counts every cancellation the action
+observed, whether it then followed a newer build or triggered again,
+and the step summary shows it when non-zero.
 
 A newer build checks out the branch after the merge under test, so its
 result covers that change too; `build_id` then names the build that

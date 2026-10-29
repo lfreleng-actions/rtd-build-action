@@ -124,6 +124,9 @@ outputs:
   build_success:
     description: "Whether the documentation build succeeded"
     value: ${{ steps.build.outputs.build_success }}
+  cancelled_builds:
+    description: "Builds Read the Docs cancelled during this run"
+    value: ${{ steps.build.outputs.cancelled_builds }}
   documentation_url:
     description: "URL of the published documentation"
     value: ${{ steps.build.outputs.documentation_url }}

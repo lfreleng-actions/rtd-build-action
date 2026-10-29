@@ -36,6 +36,7 @@ from lib.rtd_naming import (  # noqa: E402 - path set above
     umbrella_from,
     umbrella_from_url,
 )
+from lib.rtd_wait import MAX_FOLLOWS  # noqa: E402 - path set above
 
 ONAP_URL = "https://gerrit.onap.org/r/c/cps/+/141234"
 ORAN_URL = "https://gerrit.o-ran-sc.org/r/c/ric-plt/+/9999"
@@ -636,6 +637,89 @@ class SupersededBuilds(unittest.TestCase):
         self.assertEqual(len(client.trigger_deadlines), 2)
         self.assertNotIn(None, client.trigger_deadlines)
 
+    def _chain(self, follows: int, *, ends_in_success: bool) -> FakeClient:
+        """Script a trigger superseded by a chain of newer builds.
+
+        Each newer build is cancelled in turn; the last one succeeds
+        when ``ends_in_success`` is set and is superseded too otherwise.
+        """
+        chain = [str(n) for n in range(2000, 2000 + follows)]
+        script = {"1001": [build(1001, "cancelled", False)]}
+        script |= {n: [build(int(n), "cancelled", False)] for n in chain}
+        if ends_in_success:
+            script[chain[-1]] = [build(int(chain[-1]), "finished", True)]
+        client = self._client(script)
+        client.running_answers = [[build(int(n), "building")] for n in chain]
+        if not ends_in_success:
+            client.running_answers.append([build(2000 + follows, "building")])
+        return client
+
+    def test_stops_following_after_the_follow_limit(self) -> None:
+        """An endless chain of supersessions must not poll until timeout."""
+        client = self._chain(MAX_FOLLOWS, ends_in_success=False)
+        last = str(2000 + MAX_FOLLOWS - 1)
+        with self.assertRaisesRegex(
+            ReadTheDocsError, rf"followed {MAX_FOLLOWS} .*{last}"
+        ):
+            _ = run(fast(mode=MODE_MERGE), client)
+        self.assertEqual(len(client.builds), 1)
+
+    def test_follows_up_to_the_follow_limit(self) -> None:
+        client = self._chain(MAX_FOLLOWS, ends_in_success=True)
+        outcome = run(fast(mode=MODE_MERGE), client)
+        self.assertTrue(outcome.build_success)
+        self.assertEqual(outcome.build_id, str(2000 + MAX_FOLLOWS - 1))
+        self.assertEqual(len(client.builds), 1)
+        self.assertEqual(outcome.as_dict()["cancelled_builds"], MAX_FOLLOWS)
+
+
+class CancelledBuildCount(unittest.TestCase):
+    """The outcome reports every cancellation the merge lane observed."""
+
+    def _client(self, script: dict[str, list[dict[str, object]]]) -> FakeClient:
+        return FakeClient(
+            projects={"onap-cps", "onap-doc"},
+            subprojects={"onap-doc": ["onap-cps"]},
+            build_script=script,
+        )
+
+    def test_counts_a_followed_cancellation(self) -> None:
+        client = self._client({"1001": [build(1001, "cancelled", False)]})
+        client.running_answers = [[build(2000, "building")]]
+        outcome = run(fast(mode=MODE_MERGE), client)
+        self.assertEqual(outcome.build_id, "2000")
+        self.assertEqual(outcome.as_dict()["cancelled_builds"], 1)
+
+    def test_counts_a_retriggered_cancellation(self) -> None:
+        client = self._client({"1001": [build(1001, "cancelled", False)]})
+        outcome = run(fast(mode=MODE_MERGE), client)
+        self.assertEqual(outcome.build_id, "1002")
+        self.assertEqual(outcome.as_dict()["cancelled_builds"], 1)
+
+    def test_counts_follows_and_retriggers_together(self) -> None:
+        client = self._client(
+            {
+                "1001": [build(1001, "cancelled", False)],
+                "2000": [build(2000, "cancelled", False)],
+            }
+        )
+        client.running_answers = [[build(2000, "building")], []]
+        outcome = run(fast(mode=MODE_MERGE), client)
+        self.assertEqual(outcome.build_id, "1002")
+        self.assertEqual(len(client.builds), 2)
+        self.assertEqual(outcome.as_dict()["cancelled_builds"], 2)
+
+    def test_reports_zero_without_cancellation(self) -> None:
+        outcome = run(fast(mode=MODE_MERGE), self._client({}))
+        self.assertTrue(outcome.build_success)
+        self.assertEqual(outcome.as_dict()["cancelled_builds"], 0)
+
+    def test_emits_the_count_as_an_output(self) -> None:
+        from lib.emit_outputs import render  # noqa: PLC0415
+
+        lines = render({"cancelled_builds": 2}, "{}")
+        self.assertIn("cancelled_builds=2", lines)
+
 
 class SlashedBranches(unittest.TestCase):
     """A branch containing a slash reaches the API as a slug.
@@ -891,6 +975,18 @@ class Rendering(unittest.TestCase):
         }
         for line in note_lines(outcome):
             self.assertNotIn("\n", line)
+
+    def test_omits_the_cancellation_row_when_none_occurred(self) -> None:
+        from lib.render_summary import property_rows  # noqa: PLC0415
+
+        rows = property_rows({"build_id": "1001", "cancelled_builds": 0})
+        self.assertFalse(any("Cancelled" in row for row in rows))
+
+    def test_shows_the_cancellation_row_when_some_occurred(self) -> None:
+        from lib.render_summary import property_rows  # noqa: PLC0415
+
+        rows = property_rows({"build_id": "2000", "cancelled_builds": 3})
+        self.assertIn("| Cancelled builds | 3 |", rows)
 
 
 if __name__ == "__main__":
