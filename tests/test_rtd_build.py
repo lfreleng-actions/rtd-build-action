@@ -67,6 +67,7 @@ class FakeClient:
         # Successive build_list answers; once spent, running applies.
         self.running_answers: list[list[dict[str, object]]] = []
         self.calls: list[str] = []
+        self.trigger_deadlines: list[float | None] = []
         self.builds: list[tuple[str, str]] = []
         self.repositories: dict[str, str] = {}
         self._next_build: int = 1000
@@ -107,10 +108,13 @@ class FakeClient:
         self.versions[(project, version)] = True
         return {"status": "success"}
 
-    def build_trigger(self, project: str, version: str) -> str:
+    def build_trigger(
+        self, project: str, version: str, deadline: float | None = None
+    ) -> str:
         """Record a build and return its identifier."""
         self.calls.append(f"build:{project}/{version}")
         self.builds.append((project, version))
+        self.trigger_deadlines.append(deadline)
         self._next_build += 1
         # A triggered build makes Read the Docs aware of the version.
         _ = self.versions.setdefault((project, version), False)
@@ -624,6 +628,14 @@ class SupersededBuilds(unittest.TestCase):
         ):
             _ = run(fast(mode=MODE_MERGE), client)
         self.assertEqual(len(client.builds), 1)
+
+    @unittest.expectedFailure
+    def test_bounds_every_trigger_by_the_deadline(self) -> None:
+        """API retries inside a trigger must not outlast the build timeout."""
+        client = self._client({"1001": [build(1001, "cancelled", False)]})
+        _ = run(fast(mode=MODE_MERGE), client)
+        self.assertEqual(len(client.trigger_deadlines), 2)
+        self.assertNotIn(None, client.trigger_deadlines)
 
 
 class SlashedBranches(unittest.TestCase):
