@@ -32,14 +32,12 @@ from lib.rtd_naming import (
     slugify,
     umbrella_from,
 )
+from lib.rtd_wait import Polling, Target, publish
 
 log = logging.getLogger(__name__)
 
 MODE_VERIFY = "verify"
 MODE_MERGE = "merge"
-
-#: Build states Read the Docs reports as a completed failure.
-_FAILED_STATES = {"failed", "cancelled"}
 
 #: Branch names Read the Docs publishes under its ``latest`` alias.
 #: Read the Docs never creates a version slug for the default branch; it
@@ -185,29 +183,10 @@ def wait_for_build(
     settings: Settings,
     outcome: Outcome,
 ) -> None:
-    """Trigger a build and wait for Read the Docs to finish it."""
-    build_id = client.build_trigger(project, version)
-    outcome.build_id = build_id
-    outcome.note(f"Triggered build {build_id} of {project}/{version}")
-
-    deadline = time.monotonic() + settings.build_timeout
-    while time.monotonic() < deadline:
-        time.sleep(settings.poll_interval)
-        details = client.build_details(project, build_id)
-        success = details.get("success")
-        state = str(details.get("state", "")).lower()
-
-        if success is True:
-            outcome.build_success = True
-            outcome.note(f"Build {build_id} completed successfully")
-            return
-        if success is False or state in _FAILED_STATES:
-            msg = f"Read the Docs build {build_id} of {project}/{version} failed"
-            raise ReadTheDocsError(msg)
-        log.info("Build %s in state %s; waiting", build_id, state or "unknown")
-
-    msg = f"Read the Docs build {build_id} did not finish within {settings.build_timeout}s"
-    raise ReadTheDocsError(msg)
+    """Build a version and record the build that published it."""
+    polling = Polling(timeout=settings.build_timeout, interval=settings.poll_interval)
+    outcome.build_id = publish(client, Target(project, version), polling, outcome.note)
+    outcome.build_success = True
 
 
 def ensure_project(
