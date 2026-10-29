@@ -158,3 +158,116 @@ jobs:
           # Report success
           echo "All validation tests passed ✅"
           echo "All validation tests passed ✅" >> "$GITHUB_STEP_SUMMARY"
+
+  ### Test that modules in the caller's workspace are never imported ###
+  workspace-modules:
+    name: "Ignore modules in the workspace"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 10
+    steps:
+      # yamllint disable-line rule:line-length
+      - uses: lfreleng-actions/harden-runner-block-action@e5e8179f45aa893b23cc8b5d2e25466355d9c4f8  # v0.14.0
+        with:
+          config: '@d43a857514f81ce2af4230aca16e179ef96148d8'  # v0.13.0
+
+      - name: "Harden runner (block)"
+        # yamllint disable-line rule:line-length
+        uses: step-security/harden-runner@dc2769abcc0fcfbadfc1df54081c1608579ef6b2  # v2.22.2
+        with:
+          egress-policy: 'block'
+          allowed-endpoints: >
+            ${{ env.CONNECTION_ALLOW_LIST }}
+
+      # Stands in for uvx, answering the one lftools-uv call the verify
+      # lane makes with explicit project names, so the whole step runs
+      # without credentials or network access.
+      - name: "Provide a stub uvx"
+        shell: bash
+        run: |
+          # Provide a stub uvx
+          set -euo pipefail
+          stub="$RUNNER_TEMP/stub-bin"
+          mkdir -p "$stub"
+          cat > "$stub/uvx" <<'STUB'
+          #!/bin/bash
+          # Expects: --quiet --from SPEC lftools-uv rtd COMMAND ARGS --json
+          if [ "${5:-}" = "rtd" ] && [ "${6:-}" = "project-details" ]; then
+            printf '{"slug": "%s", "default_version": "latest"}\n' "$7"
+            exit 0
+          fi
+          echo "stub uvx: unexpected call: $*" >&2
+          exit 1
+          STUB
+          chmod +x "$stub/uvx"
+          echo "$stub" >> "$GITHUB_PATH"
+
+      # Each planted module records its name in a marker file and exits
+      # non-zero, so importing any of them in place of the real module
+      # shows up in the marker and breaks the lane.
+      - name: "Plant modules in the workspace"
+        shell: bash
+        run: |
+          # Plant modules in the workspace
+          set -euo pipefail
+          body='import os
+          marker = os.path.join(os.environ["RUNNER_TEMP"], "planted-ran")
+          with open(marker, "a") as f:
+              f.write(__name__ + "\n")
+          raise SystemExit(97)
+          '
+          modules=(json argparse logging subprocess shutil secrets
+                   dataclasses sitecustomize)
+          for module in "${modules[@]}"; do
+            printf '%s\n' "$body" > "$module.py"
+          done
+          mkdir -p lib
+          printf '%s\n' "$body" > lib/__init__.py
+          echo "Planted modules in $PWD ✅"
+
+      - name: "Run the verify lane"
+        id: planted
+        uses: $/
+        continue-on-error: true
+        with:
+          mode: "verify"
+          rtd_token: "placeholder-not-used"
+          project: "example-docs"
+          parent_project: "example"
+
+      - name: "Validate the result"
+        shell: bash
+        env:
+          OUTCOME: ${{ steps.planted.outcome }}
+          PROJECT: ${{ steps.planted.outputs.project }}
+          PARENT: ${{ steps.planted.outputs.parent_project }}
+          VERSION: ${{ steps.planted.outputs.version_slug }}
+          EXISTS: ${{ steps.planted.outputs.project_exists }}
+          URL: ${{ steps.planted.outputs.documentation_url }}
+        run: |
+          # Validate the result
+          fail=0
+          if [ -e "$RUNNER_TEMP/planted-ran" ]; then
+            echo "Error: the action imported planted modules ❌"
+            cat "$RUNNER_TEMP/planted-ran"
+            fail=1
+          fi
+          if [ "$OUTCOME" != "success" ]; then
+            echo "Expected the lane to succeed, received $OUTCOME ❌"
+            fail=1
+          fi
+          expected="example-docs example latest true"
+          received="$PROJECT $PARENT $VERSION $EXISTS"
+          if [ "$received" != "$expected" ]; then
+            echo "Expected '$expected', received '$received' ❌"
+            fail=1
+          fi
+          if [ "$URL" != "https://example-docs.readthedocs.io" ]; then
+            echo "Unexpected documentation_url: $URL ❌"
+            fail=1
+          fi
+          if [ "$fail" = "0" ]; then
+            echo "No planted module was imported ✅"
+          fi
+          exit "$fail"
