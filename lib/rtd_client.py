@@ -171,11 +171,15 @@ class SupportsReadTheDocs(Protocol):
         """
         ...
 
-    def build_details(self, project: str, build_id: str) -> dict[str, object]:
-        """Retrieve a build's details."""
+    def build_details(
+        self, project: str, build_id: str, deadline: float | None = None
+    ) -> dict[str, object]:
+        """Retrieve a build's details, retrying no later than the deadline."""
         ...
 
-    def build_list(self, project: str) -> list[dict[str, object]]:
+    def build_list(
+        self, project: str, deadline: float | None = None
+    ) -> list[dict[str, object]]:
         """List the builds Read the Docs has not yet finished."""
         ...
 
@@ -362,17 +366,21 @@ class ReadTheDocsClient:
         msg = f"Read the Docs returned no build id for {project}/{version}"
         raise ReadTheDocsError(msg)
 
-    def build_details(self, project: str, build_id: str) -> dict[str, object]:
+    def build_details(
+        self, project: str, build_id: str, deadline: float | None = None
+    ) -> dict[str, object]:
         """Retrieve a build's details."""
-        return self._run_object(["project-build-details", project, build_id])
+        return self._run_object(["project-build-details", project, build_id], deadline)
 
-    def build_list(self, project: str) -> list[dict[str, object]]:
+    def build_list(
+        self, project: str, deadline: float | None = None
+    ) -> list[dict[str, object]]:
         """List the builds Read the Docs has not yet finished.
 
         The command asks the API for running builds only, which includes
         queued ones: everything short of a final state.
         """
-        payload = self._run_object(["project-build-list", project])
+        payload = self._run_object(["project-build-list", project], deadline)
         entries = payload.get("builds")
         if not isinstance(entries, list):
             return []

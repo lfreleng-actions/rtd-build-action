@@ -17,7 +17,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import cast
 
-from lib.rtd_client import ReadTheDocsError, SupportsReadTheDocs
+from lib.rtd_client import ReadTheDocsError, SupportsReadTheDocs, TransientError
 
 log = logging.getLogger(__name__)
 
@@ -105,21 +105,45 @@ def poll_build(
     deadline: float,
     polling: Polling,
 ) -> dict[str, object]:
-    """Wait for a build to end and return its final details."""
+    """Wait for a build to end and return its final details.
+
+    The build runs on Read the Docs whatever happens to a status check,
+    so a check that stays throttled or keeps failing at the server only
+    delays the next one; the deadline still bounds the wait.
+    """
+    transient = ""
     while time.monotonic() < deadline:
         time.sleep(polling.interval)
-        details = client.build_details(target.project, build_id)
+        try:
+            details = client.build_details(target.project, build_id, deadline)
+        except TransientError as exc:
+            transient = str(exc)
+            log.warning(
+                "Status check of build %s failed transiently; still waiting: %s",
+                build_id,
+                transient,
+            )
+            continue
+        transient = ""
         state = build_state(details)
         if details.get("success") is not None or state in _FINAL_STATES:
             return details
         log.info("Build %s in state %s; waiting", build_id, state or "unknown")
 
     msg = f"Read the Docs build {build_id} did not finish within {polling.timeout}s"
+    if transient:
+        msg += (
+            "; Read the Docs was still throttling or failing its status "
+            + f"checks, so the build may have finished unseen: {transient}"
+        )
     raise ReadTheDocsError(msg)
 
 
 def superseding_build(
-    client: SupportsReadTheDocs, target: Target, build_id: str
+    client: SupportsReadTheDocs,
+    target: Target,
+    build_id: str,
+    deadline: float | None = None,
 ) -> str:
     """Find the newest unfinished build of the same version.
 
@@ -134,12 +158,44 @@ def superseding_build(
 
     newer = [
         number
-        for entry in client.build_list(target.project)
+        for entry in client.build_list(target.project, deadline)
         if str(entry.get("version", "")) == target.version
         and (number := build_number(entry.get("id"))) is not None
         and number > ours
     ]
     return str(max(newer)) if newer else ""
+
+
+def await_superseding_build(
+    client: SupportsReadTheDocs,
+    target: Target,
+    build_id: str,
+    deadline: float,
+    polling: Polling,
+) -> str:
+    """Look for a newer build, repeating a lookup that fails transiently.
+
+    A failed lookup does not mean nothing newer is running: treating it
+    so would trigger a redundant build, which cancels the newer one.
+    """
+    while True:
+        try:
+            return superseding_build(client, target, build_id, deadline)
+        except TransientError as exc:
+            if time.monotonic() + polling.interval >= deadline:
+                msg = (
+                    f"Read the Docs cancelled build {build_id} of "
+                    + f"{target.project}/{target.version}, and the search for "
+                    + "a newer build kept failing transiently until the "
+                    + f"{polling.timeout}s timeout: {exc}"
+                )
+                raise ReadTheDocsError(msg) from exc
+            log.warning(
+                "Search for a build newer than %s failed transiently; retrying: %s",
+                build_id,
+                exc,
+            )
+            time.sleep(polling.interval)
 
 
 def publish(
@@ -180,7 +236,7 @@ def publish(
             raise ReadTheDocsError(msg)
 
         cancelled += 1
-        newer = superseding_build(client, target, build_id)
+        newer = await_superseding_build(client, target, build_id, deadline, polling)
         if newer:
             if followed >= MAX_FOLLOWS:
                 msg = (

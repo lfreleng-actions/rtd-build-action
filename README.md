@@ -303,6 +303,16 @@ Any other failure stops the action at once. Nor does a build trigger
 retry past the build timeout: a build started after the action stops
 watching would publish unmonitored.
 
+Once the action has triggered a build, the build runs on Read the Docs
+whatever happens to the next status check. A status check that still
+fails transiently after its retries never fails the run: the action
+logs a warning and keeps polling until the build timeout. A timeout
+reached while status checks were still failing says so and quotes the
+last error, which tells a throttled API apart from a slow build. After
+a cancellation, a search for a newer build that fails transiently
+repeats at the poll interval too, rather than triggering a redundant
+build that would cancel the newer one.
+
 ## Testing
 
 The suite runs against a fake client and a stubbed command line, so it
@@ -316,7 +326,8 @@ Coverage spans slug conversion, umbrella derivation for three
 organisations, both fallbacks, the verify lane leaving the API untouched,
 project and subproject creation, landing-version handling, branch
 discovery, version activation, a failing build, the handling of
-superseded builds and the retrying of transient API failures.
+superseded builds, the retrying of transient API failures and polling
+through them once a build has started.
 
 [lftools-uv]: https://github.com/lfreleng-actions/lftools-uv
 
