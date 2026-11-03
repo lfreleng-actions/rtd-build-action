@@ -18,8 +18,10 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from lib.rtd_client import (  # noqa: E402 - path set above
+    THROTTLE_BUDGET,
     ReadTheDocsClient,
     ReadTheDocsError,
+    TransientError,
 )
 
 THROTTLED = (
@@ -100,11 +102,33 @@ class TransientFailures(unittest.TestCase):
             _ = client.project_create("onap-cps", "https://gerrit.onap.org/r/cps", "")
         self.assertEqual(runner.call_count, 1)
 
-    def test_gives_up_after_five_attempts(self) -> None:
+    def test_keeps_retrying_throttling_within_the_budget(self) -> None:
+        """A merge burst throttles for longer than five short hints."""
         client, waits, runner = self._client(
-            *[failed(THROTTLED.format(1)) for _ in range(5)]
+            *[failed(THROTTLED.format(9)) for _ in range(7)], answered('{"id": 35}')
         )
-        with self.assertRaisesRegex(ReadTheDocsError, "HTTP 429"):
+        self.assertEqual(client.build_details("onap-cps", "35"), {"id": 35})
+        self.assertEqual(runner.call_count, 8)
+        self.assertEqual(waits, [10] * 7)
+
+    def test_gives_up_throttling_past_the_budget(self) -> None:
+        hint = 59
+        attempts = THROTTLE_BUDGET // (hint + 1) + 1
+        client, waits, runner = self._client(
+            *[failed(THROTTLED.format(hint)) for _ in range(attempts)],
+            answered('{"id": 35}'),
+        )
+        with self.assertRaisesRegex(TransientError, "HTTP 429"):
+            _ = client.build_details("onap-cps", "35")
+        self.assertEqual(runner.call_count, attempts)
+        self.assertLessEqual(sum(waits), THROTTLE_BUDGET)
+
+    def test_gives_up_after_five_attempts(self) -> None:
+        """Server errors keep an attempt limit; only throttling has a budget."""
+        client, waits, runner = self._client(
+            *[failed(SERVER_ERROR) for _ in range(5)], answered('{"id": 35}')
+        )
+        with self.assertRaisesRegex(TransientError, "HTTP 500"):
             _ = client.build_details("onap-cps", "35")
         self.assertEqual(runner.call_count, 5)
         self.assertEqual(len(waits), 4)
@@ -113,8 +137,9 @@ class TransientFailures(unittest.TestCase):
         client, _, runner = self._client(
             failed("Error: Build trigger failed with HTTP 400: bad version")
         )
-        with self.assertRaisesRegex(ReadTheDocsError, "HTTP 400"):
+        with self.assertRaisesRegex(ReadTheDocsError, "HTTP 400") as caught:
             _ = client.build_trigger("onap-cps", "latest")
+        self.assertNotIsInstance(caught.exception, TransientError)
         self.assertEqual(runner.call_count, 1)
 
     def test_stops_retrying_a_trigger_at_the_deadline(self) -> None:
@@ -124,7 +149,7 @@ class TransientFailures(unittest.TestCase):
         )
         with (
             mock.patch("time.monotonic", return_value=100.0),
-            self.assertRaisesRegex(ReadTheDocsError, "HTTP 429"),
+            self.assertRaisesRegex(TransientError, "HTTP 429"),
         ):
             _ = client.build_trigger("onap-cps", "latest", deadline=105.0)
         self.assertEqual(runner.call_count, 1)

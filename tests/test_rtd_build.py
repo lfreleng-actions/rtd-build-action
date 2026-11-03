@@ -23,7 +23,10 @@ from lib.rtd_build import (  # noqa: E402 - path set above
     Settings,
     run,
 )
-from lib.rtd_client import ReadTheDocsError  # noqa: E402 - path set above
+from lib.rtd_client import (  # noqa: E402 - path set above
+    ReadTheDocsError,
+    TransientError,
+)
 from lib.rtd_naming import (  # noqa: E402 - path set above
     NamingError,
     parse_overrides,
@@ -41,6 +44,7 @@ from lib.rtd_wait import MAX_FOLLOWS  # noqa: E402 - path set above
 ONAP_URL = "https://gerrit.onap.org/r/c/cps/+/141234"
 ORAN_URL = "https://gerrit.o-ran-sc.org/r/c/ric-plt/+/9999"
 ONAP_SERVER = "https://gerrit.onap.org/r"
+THROTTLED = "HTTP 429: Request was throttled. Expected available in 1 second."
 
 
 @final
@@ -67,6 +71,10 @@ class FakeClient:
         self.running: list[dict[str, object]] = list(running or [])
         # Successive build_list answers; once spent, running applies.
         self.running_answers: list[list[dict[str, object]]] = []
+        # Status checks per build, then build_list calls, that fail
+        # transiently before the client answers.
+        self.throttled_details: dict[str, int] = {}
+        self.throttled_lists: int = 0
         self.calls: list[str] = []
         self.trigger_deadlines: list[float | None] = []
         self.builds: list[tuple[str, str]] = []
@@ -121,9 +129,15 @@ class FakeClient:
         _ = self.versions.setdefault((project, version), False)
         return str(self._next_build)
 
-    def build_details(self, project: str, build_id: str) -> dict[str, object]:
+    def build_details(
+        self, project: str, build_id: str, deadline: float | None = None
+    ) -> dict[str, object]:
         """Return the scripted state, else a finished build."""
         self.calls.append(f"details:{project}/{build_id}")
+        _ = deadline
+        if self.throttled_details.get(build_id, 0) > 0:
+            self.throttled_details[build_id] -= 1
+            raise TransientError(f"Build '{build_id}' failed with {THROTTLED}")
         script = self.build_script.get(build_id)
         if script:
             return script.pop(0) if len(script) > 1 else script[0]
@@ -131,9 +145,15 @@ class FakeClient:
             return {"id": build_id, "success": True, "state": {"code": "finished"}}
         return {"id": build_id, "success": False, "state": {"code": "finished"}}
 
-    def build_list(self, project: str) -> list[dict[str, object]]:
+    def build_list(
+        self, project: str, deadline: float | None = None
+    ) -> list[dict[str, object]]:
         """List the builds Read the Docs has not yet finished."""
         self.calls.append(f"running:{project}")
+        _ = deadline
+        if self.throttled_lists > 0:
+            self.throttled_lists -= 1
+            raise TransientError(f"Project '{project}' failed with {THROTTLED}")
         if self.running_answers:
             return self.running_answers.pop(0)
         return list(self.running)
@@ -618,7 +638,9 @@ class SupersededBuilds(unittest.TestCase):
         client = self._client({"1001": [build(1001, "cancelled", False)]})
         clock = [0.0]
 
-        def listed(_project: str) -> list[dict[str, object]]:
+        def listed(
+            _project: str, _deadline: float | None = None
+        ) -> list[dict[str, object]]:
             clock[0] = 60.0  # the request returned after the build timeout
             return []
 
@@ -987,6 +1009,80 @@ class Rendering(unittest.TestCase):
 
         rows = property_rows({"build_id": "2000", "cancelled_builds": 3})
         self.assertIn("| Cancelled builds | 3 |", rows)
+
+
+def client_for(script: dict[str, list[dict[str, object]]]) -> FakeClient:
+    """A client whose project exists and whose builds follow the script."""
+    return FakeClient(
+        projects={"onap-cps", "onap-doc"},
+        subprojects={"onap-doc": ["onap-cps"]},
+        build_script=script,
+    )
+
+
+class ThrottledStatusChecks(unittest.TestCase):
+    """A throttled status check delays the poll; it never fails it."""
+
+    def test_publishes_once_the_throttling_passes(self) -> None:
+        client = client_for(
+            {"1001": [build(1001, "building"), build(1001, "finished", True)]}
+        )
+        client.throttled_details["1001"] = 3
+        with self.assertLogs("lib.rtd_wait", "WARNING") as logs:
+            outcome = run(fast(mode=MODE_MERGE), client)
+        self.assertEqual(len(logs.output), 3)
+        self.assertTrue(all("build 1001" in line for line in logs.output))
+        self.assertTrue(outcome.build_success)
+        self.assertEqual(outcome.build_id, "1001")
+        self.assertEqual(client.builds, [("onap-cps", "latest")])
+        self.assertEqual(client.calls.count("details:onap-cps/1001"), 5)
+
+    def test_a_timeout_names_the_throttling(self) -> None:
+        """A reader must tell a throttled API from a slow build."""
+        client = client_for({"1001": [build(1001, "building")]})
+        client.throttled_details["1001"] = 1 << 20
+        clock = iter(range(1 << 20))
+        with (
+            mock.patch("time.monotonic", side_effect=lambda: float(next(clock))),
+            self.assertRaisesRegex(
+                ReadTheDocsError, r"did not finish within 5s.*throttl.*HTTP 429"
+            ),
+            self.assertLogs("lib.rtd_wait", "WARNING"),
+        ):
+            _ = run(fast(mode=MODE_MERGE), client)
+        self.assertEqual(len(client.builds), 1)
+
+
+class ThrottledSupersedingLookup(unittest.TestCase):
+    """A throttled search for a newer build is repeated, not skipped."""
+
+    def test_follows_the_newer_build_without_triggering(self) -> None:
+        client = client_for(
+            {
+                "1001": [build(1001, "cancelled", False)],
+                "2000": [build(2000, "finished", True)],
+            }
+        )
+        client.throttled_lists = 1
+        client.running_answers = [[build(2000, "building")]]
+        with self.assertLogs("lib.rtd_wait", "WARNING"):
+            outcome = run(fast(mode=MODE_MERGE), client)
+        self.assertTrue(outcome.build_success)
+        self.assertEqual(outcome.build_id, "2000")
+        self.assertEqual(client.builds, [("onap-cps", "latest")])
+        self.assertEqual(client.calls.count("running:onap-cps"), 2)
+
+    def test_gives_up_on_the_lookup_at_the_deadline(self) -> None:
+        client = client_for({"1001": [build(1001, "cancelled", False)]})
+        client.throttled_lists = 1 << 20
+        clock = iter(range(1 << 20))
+        with (
+            mock.patch("time.monotonic", side_effect=lambda: float(next(clock))),
+            self.assertRaisesRegex(ReadTheDocsError, "newer build.*HTTP 429"),
+            self.assertLogs("lib.rtd_wait", "WARNING"),
+        ):
+            _ = run(fast(mode=MODE_MERGE), client)
+        self.assertEqual(len(client.builds), 1)
 
 
 if __name__ == "__main__":
