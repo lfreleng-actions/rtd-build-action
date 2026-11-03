@@ -29,8 +29,15 @@ log = logging.getLogger(__name__)
 #: Exit status the CLI returns when the API reports a missing resource.
 _FAILURE = 1
 
-#: Attempts a command gets when Read the Docs fails it transiently.
+#: Attempts a command gets when Read the Docs fails it with a server
+#: error.
 ATTEMPTS = 5
+
+#: Seconds a throttled command may spend waiting, in total, before it
+#: gives up. Throttling counts time rather than attempts: Read the Docs
+#: names short waits, and a burst of merges throttles for far longer
+#: than five of them add up to.
+THROTTLE_BUDGET = 300
 
 #: Longest pause, in seconds, before repeating a command. Read the Docs
 #: names its own wait when it throttles; a cap keeps an outsized hint
@@ -82,6 +89,25 @@ class ReadTheDocsError(RuntimeError):
 
 class NotFoundError(ReadTheDocsError):
     """Raised when the API reports a missing project, version or build."""
+
+
+class TransientError(ReadTheDocsError):
+    """Raised when a command stops retrying a transient failure.
+
+    The failure says nothing about the request itself, so a caller
+    watching work already under way may keep watching.
+    """
+
+
+def _retries_spent(detail: str, attempt: int, waited: int, wait: int) -> bool:
+    """Report whether a transient failure has used up its retries.
+
+    Throttling may wait up to THROTTLE_BUDGET seconds in all; a server
+    error gets ATTEMPTS attempts.
+    """
+    if _THROTTLED.search(detail):
+        return waited + wait > THROTTLE_BUDGET
+    return attempt >= ATTEMPTS
 
 
 @dataclass(frozen=True)
@@ -193,34 +219,40 @@ class ReadTheDocsClient:
         """Run one command and return its decoded payload.
 
         Throttling and server errors are transient, so the command
-        repeats where retry_wait allows, up to ATTEMPTS times and never
-        past the deadline, when the caller sets one.
+        repeats where retry_wait allows, within the limits _retries_spent
+        sets and never past the deadline, when the caller sets one. A
+        transient failure that outlasts them raises TransientError.
         """
         command = [*self.config.command(), "rtd", *args, "--json"]
         log.debug("Running: %s", " ".join(command))
 
         attempt = 1
+        waited = 0
         completed = self._invoke(command, args)
         while completed.returncode != 0:
             detail = completed.stderr.strip() or completed.stdout.strip()
             if "not found" in detail.lower():
                 raise NotFoundError(detail)
+            msg = f"Read the Docs command failed: {detail or 'no output'}"
             wait = retry_wait(args[0], detail, attempt)
+            if wait is None:
+                raise ReadTheDocsError(msg)
             # A retry that would land past the caller's deadline is
             # pointless, and for a trigger harmful: the build would
             # start after the caller has stopped watching for it.
-            late = deadline is not None and time.monotonic() + (wait or 0) >= deadline
-            if wait is None or attempt >= ATTEMPTS or late:
-                msg = f"Read the Docs command failed: {detail or 'no output'}"
-                raise ReadTheDocsError(msg)
+            late = deadline is not None and time.monotonic() + wait >= deadline
+            if late or _retries_spent(detail, attempt, waited, wait):
+                raise TransientError(msg)
             log.warning(
-                "Read the Docs %s failed transiently (attempt %d of %d); retrying in %ds",
+                "Read the Docs %s failed transiently (attempt %d, %ds waited); "
+                + "retrying in %ds",
                 args[0],
                 attempt,
-                ATTEMPTS,
+                waited,
                 wait,
             )
             time.sleep(wait)
+            waited += wait
             attempt += 1
             completed = self._invoke(command, args)
 

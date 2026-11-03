@@ -286,15 +286,18 @@ older build, which cannot contain the merge.
 The API throttles bursts of requests with HTTP 429, which a wave of
 merges across ONAP projects readily triggers, and now and then answers
 with a server error. Neither says anything about the documentation, so
-the action repeats the request, up to five attempts in all:
+the action repeats the request:
 
 - **HTTP 429**: any request repeats after the wait Read the Docs names,
-  capped at 60 seconds. Even a build trigger can repeat, because a
-  throttled request never reached the handler.
-- **HTTP 5xx**: a request repeats when running it twice leaves the same
-  result: reads, and updates that set a fixed value. Creating a project
-  or subproject, or triggering a build, may already have taken effect,
-  and the action reports the error instead.
+  plus one second and capped at 60 seconds, until its waits would
+  exceed 300 seconds in all. A burst of merges throttles for far longer
+  than five short waits add up to. Even a build trigger can
+  repeat, because a throttled request never reached the handler.
+- **HTTP 5xx**: a request repeats, up to five attempts in all, when
+  running it twice leaves the same result: reads, and updates that set
+  a fixed value. Creating a project or subproject, or triggering a
+  build, may already have taken effect, and the action reports the
+  error instead.
 
 Any other failure stops the action at once. Nor does a build trigger
 retry past the build timeout: a build started after the action stops
