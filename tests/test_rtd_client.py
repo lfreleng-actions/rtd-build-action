@@ -100,6 +100,16 @@ class TransientFailures(unittest.TestCase):
             _ = client.project_create("onap-cps", "https://gerrit.onap.org/r/cps", "")
         self.assertEqual(runner.call_count, 1)
 
+    @unittest.expectedFailure
+    def test_keeps_retrying_throttling_within_the_budget(self) -> None:
+        """A merge burst throttles for longer than five short hints."""
+        client, waits, runner = self._client(
+            *[failed(THROTTLED.format(9)) for _ in range(7)], answered('{"id": 35}')
+        )
+        self.assertEqual(client.build_details("onap-cps", "35"), {"id": 35})
+        self.assertEqual(runner.call_count, 8)
+        self.assertEqual(waits, [10] * 7)
+
     def test_gives_up_after_five_attempts(self) -> None:
         client, waits, runner = self._client(
             *[failed(THROTTLED.format(1)) for _ in range(5)]
