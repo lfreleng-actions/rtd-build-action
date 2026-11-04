@@ -234,21 +234,18 @@ class MissingResources(unittest.TestCase):
         with self.assertRaisesRegex(TransientError, "HTTP 502"):
             _ = client.version_details("onap-doc", "latest")
 
-    @unittest.expectedFailure
     def test_another_missing_project_is_an_error(self) -> None:
         client, _ = self._client(failed("Error: Project 'onap' not found"))
         with self.assertRaises(ReadTheDocsError) as caught:
             _ = client.project_exists("onap-doc")
         self.assertNotIsInstance(caught.exception, NotFoundError)
 
-    @unittest.expectedFailure
     def test_a_missing_project_is_not_a_missing_version(self) -> None:
         client, _ = self._client(failed("Error: Project 'onap-doc' not found"))
         with self.assertRaises(ReadTheDocsError) as caught:
             _ = client.version_details("onap-doc", "latest")
         self.assertNotIsInstance(caught.exception, NotFoundError)
 
-    @unittest.expectedFailure
     def test_a_launcher_failure_is_an_error(self) -> None:
         client, _ = self._client(
             failed(
@@ -260,7 +257,6 @@ class MissingResources(unittest.TestCase):
             _ = client.project_exists("onap-doc")
         self.assertNotIsInstance(caught.exception, NotFoundError)
 
-    @unittest.expectedFailure
     def test_a_quoted_not_found_is_an_error(self) -> None:
         client, _ = self._client(
             failed(
@@ -272,7 +268,6 @@ class MissingResources(unittest.TestCase):
             _ = client.project_exists("onap-doc")
         self.assertNotIsInstance(caught.exception, NotFoundError)
 
-    @unittest.expectedFailure
     def test_a_not_found_with_another_status_is_an_error(self) -> None:
         client, _ = self._client(
             failed("Error: Project 'onap-doc' not found", status=2)

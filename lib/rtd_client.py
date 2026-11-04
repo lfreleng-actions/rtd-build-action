@@ -26,7 +26,7 @@ from typing import Protocol, cast, final
 
 log = logging.getLogger(__name__)
 
-#: Exit status the CLI returns when the API reports a missing resource.
+#: Exit status the CLI returns for any API error, a 404 included.
 _FAILURE = 1
 
 #: Attempts a command gets when Read the Docs fails it with a server
@@ -88,7 +88,7 @@ class ReadTheDocsError(RuntimeError):
 
 
 class NotFoundError(ReadTheDocsError):
-    """Raised when the API reports a missing project, version or build."""
+    """Raised when the API reports a missing project or version."""
 
 
 class TransientError(ReadTheDocsError):
@@ -108,6 +108,19 @@ def _retries_spent(detail: str, attempt: int, waited: int, wait: int) -> bool:
     if _THROTTLED.search(detail):
         return waited + wait > THROTTLE_BUDGET
     return attempt >= ATTEMPTS
+
+
+def _reports_missing(completed: subprocess.CompletedProcess[str], missing: str) -> bool:
+    """Report whether a failed command found the resource asked about absent.
+
+    lftools-uv answers a 404 by exiting 1 with the stderr line ``missing``,
+    followed by ``: <detail>`` when Read the Docs supplies one. No other
+    failure, even one mentioning "not found", says the resource is absent.
+    """
+    if not missing or completed.returncode != _FAILURE:
+        return False
+    lines = (line.rstrip() for line in completed.stderr.splitlines())
+    return any(line == missing or line.startswith(f"{missing}: ") for line in lines)
 
 
 @dataclass(frozen=True)
@@ -219,8 +232,13 @@ class ReadTheDocsClient:
             msg = f"Cannot run {self.config.launcher!r}; install uv or set the launcher input"
             raise ReadTheDocsError(msg) from exc
 
-    def _run(self, args: list[str], deadline: float | None = None) -> object:
+    def _run(
+        self, args: list[str], deadline: float | None = None, missing: str = ""
+    ) -> object:
         """Run one command and return its decoded payload.
+
+        Missing is the error lftools-uv prints when the resource the
+        command looks up is absent; only that failure raises NotFoundError.
 
         Throttling and server errors are transient, so the command
         repeats where retry_wait allows, within the limits _retries_spent
@@ -235,7 +253,7 @@ class ReadTheDocsClient:
         completed = self._invoke(command, args)
         while completed.returncode != 0:
             detail = completed.stderr.strip() or completed.stdout.strip()
-            if "not found" in detail.lower():
+            if _reports_missing(completed, missing):
                 raise NotFoundError(detail)
             msg = f"Read the Docs command failed: {detail or 'no output'}"
             wait = retry_wait(args[0], detail, attempt)
@@ -270,10 +288,10 @@ class ReadTheDocsClient:
             raise ReadTheDocsError(msg) from exc
 
     def _run_object(
-        self, args: list[str], deadline: float | None = None
+        self, args: list[str], deadline: float | None = None, missing: str = ""
     ) -> dict[str, object]:
         """Run a command expected to return a JSON object."""
-        payload = self._run(args, deadline)
+        payload = self._run(args, deadline, missing)
         if not isinstance(payload, dict):
             msg = f"Expected an object from {' '.join(args)}"
             raise ReadTheDocsError(msg)
@@ -283,7 +301,10 @@ class ReadTheDocsClient:
 
     def project_details(self, project: str) -> dict[str, object]:
         """Retrieve a project's details."""
-        return self._run_object(["project-details", project])
+        return self._run_object(
+            ["project-details", project],
+            missing=f"Error: Project {project!r} not found",
+        )
 
     def project_exists(self, project: str) -> bool:
         """Report whether a project exists."""
@@ -331,7 +352,10 @@ class ReadTheDocsClient:
     def version_details(self, project: str, version: str) -> dict[str, object] | None:
         """Return a version's details, or None when Read the Docs has none."""
         try:
-            return self._run_object(["project-version-details", project, version])
+            return self._run_object(
+                ["project-version-details", project, version],
+                missing=f"Error: Version {version!r} of project {project!r} not found",
+            )
         except NotFoundError:
             return None
 
