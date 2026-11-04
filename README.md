@@ -190,7 +190,7 @@ than recording an address that cannot work.
 | `build_timeout`     | False    | `1800`    | Seconds to wait for a documentation build                    |
 | `create_timeout`    | False    | `600`     | Seconds to wait for a new project to appear                  |
 | `poll_interval`     | False    | `10`      | Seconds between polls while waiting                          |
-| `lftools_version`   | False    | `0.5.3`   | Version of `lftools-uv` to run                               |
+| `lftools_version`   | False    | `0.8.0`   | Version of `lftools-uv` to run                               |
 | `summary`           | False    | `true`    | Write a report to the workflow step summary                  |
 
 <!-- markdownlint-enable MD013 -->
@@ -221,8 +221,10 @@ than recording an address that cannot work.
 The action needs `uvx` on `PATH`. Add
 [`astral-sh/setup-uv`](https://github.com/astral-sh/setup-uv) before it.
 
-Pin `lftools_version` to keep runs reproducible. Version 0.5.3 is the
-first release carrying the `--json` output the action reads.
+Pin `lftools_version` to keep runs reproducible. The default, 0.8.0,
+reports API errors with stable messages and pages through every list.
+Version 0.5.3 is the first release carrying the `--json` output the
+action reads.
 
 ## Merge lane sequence
 

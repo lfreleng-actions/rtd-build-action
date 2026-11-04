@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: 2026 The Linux Foundation
-"""Tests for the Read the Docs client's handling of transient failures.
+"""Tests for the Read the Docs client's handling of failed commands.
 
 Replaces the subprocess call with scripted results, so the suite needs
 no network access, no credentials and no lftools-uv installation.
@@ -19,6 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from lib.rtd_client import (  # noqa: E402 - path set above
     THROTTLE_BUDGET,
+    NotFoundError,
     ReadTheDocsClient,
     ReadTheDocsError,
     TransientError,
@@ -31,9 +32,9 @@ THROTTLED = (
 SERVER_ERROR = "Error: Project 'onap-doc' failed with HTTP 500:\n<!DOCTYPE html>\n<title>Server error"
 
 
-def failed(stderr: str) -> subprocess.CompletedProcess[str]:
+def failed(stderr: str, status: int = 1) -> subprocess.CompletedProcess[str]:
     """A command that exited non-zero."""
-    return subprocess.CompletedProcess([], 1, stdout="", stderr=stderr)
+    return subprocess.CompletedProcess([], status, stdout="", stderr=stderr)
 
 
 def answered(stdout: str) -> subprocess.CompletedProcess[str]:
@@ -163,6 +164,117 @@ class TransientFailures(unittest.TestCase):
             build_id = client.build_trigger("onap-cps", "latest", deadline=200.0)
         self.assertEqual(build_id, "36")
         self.assertEqual(waits, [11])
+
+
+class MissingResources(unittest.TestCase):
+    """Only lftools-uv's exact 404 message for the resource means absent.
+
+    The messages are those lftools-uv 0.8.0 prints on stderr, exiting 1.
+    """
+
+    def _client(
+        self, *results: subprocess.CompletedProcess[str]
+    ) -> tuple[ReadTheDocsClient, mock.MagicMock]:
+        for patcher in (
+            mock.patch("lib.rtd_client.subprocess.run", side_effect=list(results)),
+            mock.patch("time.sleep"),
+        ):
+            _ = patcher.start()
+            self.addCleanup(patcher.stop)
+        runner = cast("mock.MagicMock", subprocess.run)
+        return ReadTheDocsClient(), runner
+
+    def test_a_missing_project_is_absent(self) -> None:
+        client, _ = self._client(failed("Error: Project 'onap-doc' not found"))
+        self.assertFalse(client.project_exists("onap-doc"))
+
+    def test_a_missing_project_with_a_detail_is_absent(self) -> None:
+        client, _ = self._client(
+            failed(
+                "Error: Project 'onap-doc' not found: "
+                + "No Project matches the given query."
+            )
+        )
+        self.assertFalse(client.project_exists("onap-doc"))
+
+    def test_a_missing_version_is_absent(self) -> None:
+        client, _ = self._client(
+            failed("Error: Version 'latest' of project 'onap-doc' not found")
+        )
+        self.assertIsNone(client.version_details("onap-doc", "latest"))
+
+    def test_a_missing_version_with_a_detail_is_absent(self) -> None:
+        client, _ = self._client(
+            failed(
+                "warning: a dependency spoke up\n"
+                + "Error: Version 'latest' of project 'onap-doc' not found: "
+                + "Not found."
+            )
+        )
+        self.assertIsNone(client.version_details("onap-doc", "latest"))
+
+    def test_an_unauthorised_lookup_is_an_error(self) -> None:
+        client, _ = self._client(
+            failed("Error: Project 'onap-doc' failed with HTTP 401: Invalid token.")
+        )
+        with self.assertRaisesRegex(ReadTheDocsError, "HTTP 401") as caught:
+            _ = client.project_exists("onap-doc")
+        self.assertNotIsInstance(caught.exception, NotFoundError)
+
+    def test_a_server_error_is_an_error(self) -> None:
+        client, _ = self._client(
+            *[
+                failed(
+                    "Error: Version 'latest' of project 'onap-doc' "
+                    + "failed with HTTP 502"
+                )
+                for _ in range(5)
+            ]
+        )
+        with self.assertRaisesRegex(TransientError, "HTTP 502"):
+            _ = client.version_details("onap-doc", "latest")
+
+    def test_another_missing_project_is_an_error(self) -> None:
+        client, _ = self._client(failed("Error: Project 'onap' not found"))
+        with self.assertRaises(ReadTheDocsError) as caught:
+            _ = client.project_exists("onap-doc")
+        self.assertNotIsInstance(caught.exception, NotFoundError)
+
+    def test_a_missing_project_is_not_a_missing_version(self) -> None:
+        client, _ = self._client(failed("Error: Project 'onap-doc' not found"))
+        with self.assertRaises(ReadTheDocsError) as caught:
+            _ = client.version_details("onap-doc", "latest")
+        self.assertNotIsInstance(caught.exception, NotFoundError)
+
+    def test_a_launcher_failure_is_an_error(self) -> None:
+        client, _ = self._client(
+            failed(
+                "error: Executable `lftools-uv` not found in package `lftools-uv`",
+                status=2,
+            )
+        )
+        with self.assertRaises(ReadTheDocsError) as caught:
+            _ = client.project_exists("onap-doc")
+        self.assertNotIsInstance(caught.exception, NotFoundError)
+
+    def test_a_quoted_not_found_is_an_error(self) -> None:
+        client, _ = self._client(
+            failed(
+                "Error: Project 'onap-doc' failed with HTTP 400: "
+                + "Error: Project 'onap-doc' not found"
+            )
+        )
+        with self.assertRaises(ReadTheDocsError) as caught:
+            _ = client.project_exists("onap-doc")
+        self.assertNotIsInstance(caught.exception, NotFoundError)
+
+    def test_a_not_found_with_another_status_is_an_error(self) -> None:
+        client, _ = self._client(
+            failed("Error: Project 'onap-doc' not found", status=2)
+        )
+        with self.assertRaises(ReadTheDocsError) as caught:
+            _ = client.project_exists("onap-doc")
+        self.assertNotIsInstance(caught.exception, NotFoundError)
 
 
 if __name__ == "__main__":
