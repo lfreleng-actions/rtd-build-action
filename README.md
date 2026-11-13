@@ -221,6 +221,12 @@ than recording an address that cannot work.
 The action needs `uvx` on `PATH`. Add
 [`astral-sh/setup-uv`](https://github.com/astral-sh/setup-uv) before it.
 
+The action provides its own Python 3.13 through
+[`actions/setup-python`](https://github.com/actions/setup-python) and
+runs its helpers on that interpreter in isolated mode (`-I`), so the
+`python3` on the caller's `PATH` and any modules in the workspace play
+no part. It leaves the caller's `PATH` and environment unchanged.
+
 Pin `lftools_version` to keep runs reproducible. The default, 0.8.0,
 reports API errors with stable messages and pages through every list.
 Version 0.5.3 is the first release carrying the `--json` output the
