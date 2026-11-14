@@ -152,6 +152,17 @@ runs:
         echo 'Add astral-sh/setup-uv before this action.'
         exit 1
 
+    # The helpers run on an interpreter this action chooses, not on
+    # whatever python3 the caller's PATH resolves. update-environment
+    # stays off so the caller's PATH and later steps are unchanged.
+    - name: "Set up Python"
+      id: python
+      # yamllint disable-line rule:line-length
+      uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+      with:
+        python-version: "3.13"
+        update-environment: false
+
     - name: "Write the ReadTheDocs credentials"
       id: credentials
       shell: bash
@@ -217,6 +228,7 @@ runs:
         INPUT_LFTOOLS_VERSION: ${{ inputs.lftools_version }}
         INPUT_SUMMARY: ${{ inputs.summary }}
         ACTION_PATH: ${{ github.action_path }}
+        PYTHON: ${{ steps.python.outputs.python-path }}
       run: |
         # Run the ReadTheDocs lane
         set -uo pipefail
@@ -258,25 +270,27 @@ runs:
           --lftools-version "$INPUT_LFTOOLS_VERSION"
         )
 
-        # Run the helpers from the action's own directory: python3 -m
-        # puts the working directory ahead of PYTHONPATH, so from the
-        # caller's workspace a lib/ or json.py there would be imported
-        # instead. Nothing here reads the workspace.
+        # Run the helpers isolated (-I): neither the working directory,
+        # PYTHONPATH nor the user site directory reaches sys.path, so a
+        # lib/ or json.py in the caller's workspace is never imported.
+        # lib/launch.py adds the action's own root. Running from the
+        # action's directory also keeps uvx clear of workspace config.
+        # Nothing here reads the workspace.
         cd "$ACTION_PATH" || exit 1
+        launch="${ACTION_PATH}/lib/launch.py"
 
-        outcome="$(PYTHONPATH="${ACTION_PATH}" \
-          python3 -m lib.cli "${args[@]}")"
+        outcome="$("$PYTHON" -I "$launch" lib.cli "${args[@]}")"
         status=$?
 
         if [ -n "$outcome" ]; then
           printf '%s\n' "$outcome"
           printf '%s' "$outcome" \
-            | PYTHONPATH="${ACTION_PATH}" python3 -m lib.emit_outputs \
+            | "$PYTHON" -I "$launch" lib.emit_outputs \
             >> "$GITHUB_OUTPUT"
 
           if [ "$INPUT_SUMMARY" = "true" ]; then
             printf '%s' "$outcome" \
-              | PYTHONPATH="${ACTION_PATH}" python3 -m lib.render_summary \
+              | "$PYTHON" -I "$launch" lib.render_summary \
               >> "$GITHUB_STEP_SUMMARY"
           fi
         fi
