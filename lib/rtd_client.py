@@ -26,8 +26,10 @@ from typing import cast, final
 
 log = logging.getLogger(__name__)
 
-#: Exit status the CLI returns for any API error, a 404 included.
-_FAILURE = 1
+#: Exit status lftools-uv 0.9.0 and later return when a read finds
+#: nothing. Earlier releases exit 1 for any API error, a 404 included,
+#: so a missing resource cannot be told apart from another failure.
+_NOT_FOUND = 3
 
 #: Attempts a command gets when Read the Docs fails it with a server
 #: error.
@@ -113,11 +115,13 @@ def _retries_spent(detail: str, attempt: int, waited: int, wait: int) -> bool:
 def _reports_missing(completed: subprocess.CompletedProcess[str], missing: str) -> bool:
     """Report whether a failed command found the resource asked about absent.
 
-    lftools-uv answers a 404 by exiting 1 with the stderr line ``missing``,
-    followed by ``: <detail>`` when Read the Docs supplies one. No other
-    failure, even one mentioning "not found", says the resource is absent.
+    lftools-uv 0.9.0 and later answer a 404 by exiting 3 with the stderr
+    line ``missing``, followed by ``: <detail>`` when Read the Docs
+    supplies one. Earlier releases print the same line but exit 1, as for
+    any failure, so exit status 1 never means absent. No other failure,
+    even one mentioning "not found", says the resource is absent.
     """
-    if not missing or completed.returncode != _FAILURE:
+    if not missing or completed.returncode != _NOT_FOUND:
         return False
     lines = (line.rstrip() for line in completed.stderr.splitlines())
     return any(line == missing or line.startswith(f"{missing}: ") for line in lines)
@@ -132,11 +136,15 @@ class ClientConfig:
     launcher: str = "uvx"
 
     def command(self) -> list[str]:
-        """Build the command prefix that runs the tool."""
+        """Build the command prefix that runs the tool.
+
+        The ``pinned`` extra fixes every dependency at the version the
+        release's lock file records, so a new release of one cannot
+        change what a run installs.
+        """
+        spec = f"{self.package}[pinned]"
         if self.version:
-            spec = f"{self.package}=={self.version}"
-        else:
-            spec = self.package
+            spec = f"{spec}=={self.version}"
         return [self.launcher, "--quiet", "--from", spec, self.package]
 
 
