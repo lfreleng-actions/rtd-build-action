@@ -19,6 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from lib.rtd_client import (  # noqa: E402 - path set above
     THROTTLE_BUDGET,
+    ClientConfig,
     NotFoundError,
     ReadTheDocsClient,
     ReadTheDocsError,
@@ -30,6 +31,9 @@ THROTTLED = (
     + "Request was throttled. Expected available in {} seconds."
 )
 SERVER_ERROR = "Error: Project 'onap-doc' failed with HTTP 500:\n<!DOCTYPE html>\n<title>Server error"
+
+#: Exit status lftools-uv 0.9.0 and later return when a read finds nothing.
+NOT_FOUND = 3
 
 
 def failed(stderr: str, status: int = 1) -> subprocess.CompletedProcess[str]:
@@ -169,7 +173,8 @@ class TransientFailures(unittest.TestCase):
 class MissingResources(unittest.TestCase):
     """Only lftools-uv's exact 404 message for the resource means absent.
 
-    The messages are those lftools-uv 0.8.0 prints on stderr, exiting 1.
+    The messages are those lftools-uv prints on stderr. From 0.9.0 it
+    exits 3 with them; earlier releases exit 1, as for any failure.
     """
 
     def _client(
@@ -184,34 +189,64 @@ class MissingResources(unittest.TestCase):
         runner = cast("mock.MagicMock", subprocess.run)
         return ReadTheDocsClient(), runner
 
+    @unittest.expectedFailure
     def test_a_missing_project_is_absent(self) -> None:
-        client, _ = self._client(failed("Error: Project 'onap-doc' not found"))
+        client, _ = self._client(
+            failed("Error: Project 'onap-doc' not found", status=NOT_FOUND)
+        )
         self.assertFalse(client.project_exists("onap-doc"))
 
+    @unittest.expectedFailure
     def test_a_missing_project_with_a_detail_is_absent(self) -> None:
         client, _ = self._client(
             failed(
                 "Error: Project 'onap-doc' not found: "
-                + "No Project matches the given query."
+                + "No Project matches the given query.",
+                status=NOT_FOUND,
             )
         )
         self.assertFalse(client.project_exists("onap-doc"))
 
+    @unittest.expectedFailure
     def test_a_missing_version_is_absent(self) -> None:
         client, _ = self._client(
-            failed("Error: Version 'latest' of project 'onap-doc' not found")
+            failed(
+                "Error: Version 'latest' of project 'onap-doc' not found",
+                status=NOT_FOUND,
+            )
         )
         self.assertIsNone(client.version_details("onap-doc", "latest"))
 
+    @unittest.expectedFailure
     def test_a_missing_version_with_a_detail_is_absent(self) -> None:
         client, _ = self._client(
             failed(
                 "warning: a dependency spoke up\n"
                 + "Error: Version 'latest' of project 'onap-doc' not found: "
-                + "Not found."
+                + "Not found.",
+                status=NOT_FOUND,
             )
         )
         self.assertIsNone(client.version_details("onap-doc", "latest"))
+
+    @unittest.expectedFailure
+    def test_a_missing_project_with_status_one_is_an_error(self) -> None:
+        """Before 0.9.0 exit status 1 meant any failure, so it never means absent."""
+        client, _ = self._client(
+            failed("Error: Project 'onap-newproj' not found: Not found.")
+        )
+        with self.assertRaises(ReadTheDocsError) as caught:
+            _ = client.project_exists("onap-newproj")
+        self.assertNotIsInstance(caught.exception, NotFoundError)
+
+    @unittest.expectedFailure
+    def test_a_missing_version_with_status_one_is_an_error(self) -> None:
+        client, _ = self._client(
+            failed("Error: Version 'latest' of project 'onap-doc' not found")
+        )
+        with self.assertRaises(ReadTheDocsError) as caught:
+            _ = client.version_details("onap-doc", "latest")
+        self.assertNotIsInstance(caught.exception, NotFoundError)
 
     def test_an_unauthorised_lookup_is_an_error(self) -> None:
         client, _ = self._client(
@@ -235,13 +270,17 @@ class MissingResources(unittest.TestCase):
             _ = client.version_details("onap-doc", "latest")
 
     def test_another_missing_project_is_an_error(self) -> None:
-        client, _ = self._client(failed("Error: Project 'onap' not found"))
+        client, _ = self._client(
+            failed("Error: Project 'onap' not found", status=NOT_FOUND)
+        )
         with self.assertRaises(ReadTheDocsError) as caught:
             _ = client.project_exists("onap-doc")
         self.assertNotIsInstance(caught.exception, NotFoundError)
 
     def test_a_missing_project_is_not_a_missing_version(self) -> None:
-        client, _ = self._client(failed("Error: Project 'onap-doc' not found"))
+        client, _ = self._client(
+            failed("Error: Project 'onap-doc' not found", status=NOT_FOUND)
+        )
         with self.assertRaises(ReadTheDocsError) as caught:
             _ = client.version_details("onap-doc", "latest")
         self.assertNotIsInstance(caught.exception, NotFoundError)
@@ -261,7 +300,8 @@ class MissingResources(unittest.TestCase):
         client, _ = self._client(
             failed(
                 "Error: Project 'onap-doc' failed with HTTP 400: "
-                + "Error: Project 'onap-doc' not found"
+                + "Error: Project 'onap-doc' not found",
+                status=NOT_FOUND,
             )
         )
         with self.assertRaises(ReadTheDocsError) as caught:
@@ -275,6 +315,24 @@ class MissingResources(unittest.TestCase):
         with self.assertRaises(ReadTheDocsError) as caught:
             _ = client.project_exists("onap-doc")
         self.assertNotIsInstance(caught.exception, NotFoundError)
+
+
+class Command(unittest.TestCase):
+    """The tool runs with the dependency set its release recorded."""
+
+    @unittest.expectedFailure
+    def test_a_pinned_version_asks_for_the_pinned_extra(self) -> None:
+        self.assertEqual(
+            ClientConfig(version="0.11.0").command(),
+            ["uvx", "--quiet", "--from", "lftools-uv[pinned]==0.11.0", "lftools-uv"],
+        )
+
+    @unittest.expectedFailure
+    def test_an_empty_version_asks_for_the_pinned_extra(self) -> None:
+        self.assertEqual(
+            ClientConfig().command(),
+            ["uvx", "--quiet", "--from", "lftools-uv[pinned]", "lftools-uv"],
+        )
 
 
 if __name__ == "__main__":
