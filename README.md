@@ -190,7 +190,7 @@ than recording an address that cannot work.
 | `build_timeout`     | False    | `1800`    | Seconds to wait for a documentation build                    |
 | `create_timeout`    | False    | `600`     | Seconds to wait for a new project to appear                  |
 | `poll_interval`     | False    | `10`      | Seconds between polls while waiting                          |
-| `lftools_version`   | False    | `0.8.0`   | Version of `lftools-uv` to run                               |
+| `lftools_version`   | False    | `0.11.0`  | Version of `lftools-uv` to run; 0.11.0 or later              |
 | `summary`           | False    | `true`    | Write a report to the workflow step summary                  |
 
 <!-- markdownlint-enable MD013 -->
@@ -227,10 +227,14 @@ runs its helpers on that interpreter in isolated mode (`-I`), so the
 `python3` on the caller's `PATH` and any modules in the workspace play
 no part. It leaves the caller's `PATH` and environment unchanged.
 
-Pin `lftools_version` to keep runs reproducible. The default, 0.8.0,
-reports API errors with stable messages and pages through every list.
-Version 0.5.3 is the first release carrying the `--json` output the
-action reads.
+Pin `lftools_version` to keep runs reproducible. The default is 0.11.0,
+and the action refuses an older release before it calls Read the Docs.
+Version 0.11.0 is the first with the `pinned` extra, which the action
+requests: it fixes every dependency at the version the release's lock
+file records, so a new release of a dependency cannot break a build.
+Since 0.9.0, lftools-uv exits 3 when a project or version is missing,
+which is how the action tells "not there yet" from any other failure.
+An empty `lftools_version` runs the newest release.
 
 ## Merge lane sequence
 

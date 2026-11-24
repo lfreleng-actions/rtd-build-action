@@ -88,9 +88,9 @@ inputs:
     default: "10"
   lftools_version:
     # yamllint disable-line rule:line-length
-    description: "Version of lftools-uv to run; pin this to keep runs reproducible"
+    description: "Version of lftools-uv to run, 0.11.0 or later; empty runs the newest"
     required: false
-    default: "0.8.0"
+    default: "0.11.0"
   summary:
     description: "Write a report to the workflow step summary"
     required: false

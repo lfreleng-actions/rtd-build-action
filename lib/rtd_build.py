@@ -18,10 +18,7 @@ import logging
 import time
 from dataclasses import dataclass, field
 
-from lib.rtd_client import (
-    ReadTheDocsError,
-    SupportsReadTheDocs,
-)
+from lib.rtd_client import ReadTheDocsError
 from lib.rtd_naming import (
     apply_overrides,
     parent_slug,
@@ -32,6 +29,7 @@ from lib.rtd_naming import (
     slugify,
     umbrella_from,
 )
+from lib.rtd_protocol import SupportsReadTheDocs
 from lib.rtd_wait import Polling, Target, publish
 
 log = logging.getLogger(__name__)

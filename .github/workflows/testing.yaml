@@ -193,6 +193,11 @@ jobs:
           cat > "$stub/uvx" <<'STUB'
           #!/bin/bash
           # Expects: --quiet --from SPEC lftools-uv rtd COMMAND ARGS --json
+          # SPEC must ask for the pinned extra at the default version.
+          if [ "${3:-}" != "lftools-uv[pinned]==0.11.0" ]; then
+            echo "stub uvx: unexpected spec: ${3:-}" >&2
+            exit 1
+          fi
           if [ "${5:-}" = "rtd" ] && [ "${6:-}" = "project-details" ]; then
             printf '{"slug": "%s", "default_version": "latest"}\n' "$7"
             exit 0

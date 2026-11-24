@@ -22,12 +22,14 @@ import shutil
 import subprocess
 import time
 from dataclasses import dataclass
-from typing import Protocol, cast, final
+from typing import cast, final
 
 log = logging.getLogger(__name__)
 
-#: Exit status the CLI returns for any API error, a 404 included.
-_FAILURE = 1
+#: Exit status lftools-uv 0.9.0 and later return when a read finds
+#: nothing. Earlier releases exit 1 for any API error, a 404 included,
+#: so a missing resource cannot be told apart from another failure.
+_NOT_FOUND = 3
 
 #: Attempts a command gets when Read the Docs fails it with a server
 #: error.
@@ -113,11 +115,13 @@ def _retries_spent(detail: str, attempt: int, waited: int, wait: int) -> bool:
 def _reports_missing(completed: subprocess.CompletedProcess[str], missing: str) -> bool:
     """Report whether a failed command found the resource asked about absent.
 
-    lftools-uv answers a 404 by exiting 1 with the stderr line ``missing``,
-    followed by ``: <detail>`` when Read the Docs supplies one. No other
-    failure, even one mentioning "not found", says the resource is absent.
+    lftools-uv 0.9.0 and later answer a 404 by exiting 3 with the stderr
+    line ``missing``, followed by ``: <detail>`` when Read the Docs
+    supplies one. Earlier releases print the same line but exit 1, as for
+    any failure, so exit status 1 never means absent. No other failure,
+    even one mentioning "not found", says the resource is absent.
     """
-    if not missing or completed.returncode != _FAILURE:
+    if not missing or completed.returncode != _NOT_FOUND:
         return False
     lines = (line.rstrip() for line in completed.stderr.splitlines())
     return any(line == missing or line.startswith(f"{missing}: ") for line in lines)
@@ -132,77 +136,16 @@ class ClientConfig:
     launcher: str = "uvx"
 
     def command(self) -> list[str]:
-        """Build the command prefix that runs the tool."""
-        if self.version:
-            spec = f"{self.package}=={self.version}"
-        else:
-            spec = self.package
-        return [self.launcher, "--quiet", "--from", spec, self.package]
+        """Build the command prefix that runs the tool.
 
-
-class SupportsReadTheDocs(Protocol):
-    """The API surface the lanes depend on.
-
-    Declaring the surface as a protocol lets the tests supply an
-    in-memory double without inheriting from the subprocess-backed
-    client, and keeps the lanes independent of how the calls travel.
-    """
-
-    def project_exists(self, project: str) -> bool:
-        """Report whether a project exists."""
-        ...
-
-    def project_create(
-        self, name: str, repository_url: str, homepage: str
-    ) -> dict[str, object]:
-        """Create a project."""
-        ...
-
-    def project_update(self, project: str, **fields: str) -> dict[str, object]:
-        """Update project fields."""
-        ...
-
-    def default_version(self, project: str) -> str:
-        """Return the project's landing version."""
-        ...
-
-    def version_active(self, project: str, version: str) -> bool | None:
-        """Report whether a version is active, or None when unknown."""
-        ...
-
-    def version_activate(self, project: str, version: str) -> dict[str, object]:
-        """Mark a version active."""
-        ...
-
-    def build_trigger(
-        self, project: str, version: str, deadline: float | None = None
-    ) -> str:
-        """Trigger a build and return its identifier.
-
-        A deadline, on the time.monotonic clock, stops retries that
-        would start the build after the caller has stopped waiting.
+        The ``pinned`` extra fixes every dependency at the version the
+        release's lock file records, so a new release of one cannot
+        change what a run installs.
         """
-        ...
-
-    def build_details(
-        self, project: str, build_id: str, deadline: float | None = None
-    ) -> dict[str, object]:
-        """Retrieve a build's details, retrying no later than the deadline."""
-        ...
-
-    def build_list(
-        self, project: str, deadline: float | None = None
-    ) -> list[dict[str, object]]:
-        """List the builds Read the Docs has not yet finished."""
-        ...
-
-    def subproject_list(self, project: str) -> list[str]:
-        """List the subproject slugs attached to a project."""
-        ...
-
-    def subproject_create(self, project: str, subproject: str) -> dict[str, object]:
-        """Attach a project to a parent as a subproject."""
-        ...
+        spec = f"{self.package}[pinned]"
+        if self.version:
+            spec = f"{spec}=={self.version}"
+        return [self.launcher, "--quiet", "--from", spec, self.package]
 
 
 @final

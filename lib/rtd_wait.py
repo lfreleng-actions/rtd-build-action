@@ -17,7 +17,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import cast
 
-from lib.rtd_client import ReadTheDocsError, SupportsReadTheDocs, TransientError
+from lib.rtd_client import ReadTheDocsError, TransientError
+from lib.rtd_protocol import SupportsReadTheDocs
 
 log = logging.getLogger(__name__)
 

@@ -17,8 +17,13 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from lib.cli import build_parser, main, settings_from  # noqa: E402 - path set above
+from lib.lftools_version import (  # noqa: E402 - path set above
+    require_supported_version,
+)
 from lib.rtd_client import (  # noqa: E402 - path set above
     THROTTLE_BUDGET,
+    ClientConfig,
     NotFoundError,
     ReadTheDocsClient,
     ReadTheDocsError,
@@ -30,6 +35,9 @@ THROTTLED = (
     + "Request was throttled. Expected available in {} seconds."
 )
 SERVER_ERROR = "Error: Project 'onap-doc' failed with HTTP 500:\n<!DOCTYPE html>\n<title>Server error"
+
+#: Exit status lftools-uv 0.9.0 and later return when a read finds nothing.
+NOT_FOUND = 3
 
 
 def failed(stderr: str, status: int = 1) -> subprocess.CompletedProcess[str]:
@@ -169,7 +177,8 @@ class TransientFailures(unittest.TestCase):
 class MissingResources(unittest.TestCase):
     """Only lftools-uv's exact 404 message for the resource means absent.
 
-    The messages are those lftools-uv 0.8.0 prints on stderr, exiting 1.
+    The messages are those lftools-uv prints on stderr. From 0.9.0 it
+    exits 3 with them; earlier releases exit 1, as for any failure.
     """
 
     def _client(
@@ -185,21 +194,27 @@ class MissingResources(unittest.TestCase):
         return ReadTheDocsClient(), runner
 
     def test_a_missing_project_is_absent(self) -> None:
-        client, _ = self._client(failed("Error: Project 'onap-doc' not found"))
+        client, _ = self._client(
+            failed("Error: Project 'onap-doc' not found", status=NOT_FOUND)
+        )
         self.assertFalse(client.project_exists("onap-doc"))
 
     def test_a_missing_project_with_a_detail_is_absent(self) -> None:
         client, _ = self._client(
             failed(
                 "Error: Project 'onap-doc' not found: "
-                + "No Project matches the given query."
+                + "No Project matches the given query.",
+                status=NOT_FOUND,
             )
         )
         self.assertFalse(client.project_exists("onap-doc"))
 
     def test_a_missing_version_is_absent(self) -> None:
         client, _ = self._client(
-            failed("Error: Version 'latest' of project 'onap-doc' not found")
+            failed(
+                "Error: Version 'latest' of project 'onap-doc' not found",
+                status=NOT_FOUND,
+            )
         )
         self.assertIsNone(client.version_details("onap-doc", "latest"))
 
@@ -208,10 +223,28 @@ class MissingResources(unittest.TestCase):
             failed(
                 "warning: a dependency spoke up\n"
                 + "Error: Version 'latest' of project 'onap-doc' not found: "
-                + "Not found."
+                + "Not found.",
+                status=NOT_FOUND,
             )
         )
         self.assertIsNone(client.version_details("onap-doc", "latest"))
+
+    def test_a_missing_project_with_status_one_is_an_error(self) -> None:
+        """Before 0.9.0 exit status 1 meant any failure, so it never means absent."""
+        client, _ = self._client(
+            failed("Error: Project 'onap-newproj' not found: Not found.")
+        )
+        with self.assertRaises(ReadTheDocsError) as caught:
+            _ = client.project_exists("onap-newproj")
+        self.assertNotIsInstance(caught.exception, NotFoundError)
+
+    def test_a_missing_version_with_status_one_is_an_error(self) -> None:
+        client, _ = self._client(
+            failed("Error: Version 'latest' of project 'onap-doc' not found")
+        )
+        with self.assertRaises(ReadTheDocsError) as caught:
+            _ = client.version_details("onap-doc", "latest")
+        self.assertNotIsInstance(caught.exception, NotFoundError)
 
     def test_an_unauthorised_lookup_is_an_error(self) -> None:
         client, _ = self._client(
@@ -235,13 +268,17 @@ class MissingResources(unittest.TestCase):
             _ = client.version_details("onap-doc", "latest")
 
     def test_another_missing_project_is_an_error(self) -> None:
-        client, _ = self._client(failed("Error: Project 'onap' not found"))
+        client, _ = self._client(
+            failed("Error: Project 'onap' not found", status=NOT_FOUND)
+        )
         with self.assertRaises(ReadTheDocsError) as caught:
             _ = client.project_exists("onap-doc")
         self.assertNotIsInstance(caught.exception, NotFoundError)
 
     def test_a_missing_project_is_not_a_missing_version(self) -> None:
-        client, _ = self._client(failed("Error: Project 'onap-doc' not found"))
+        client, _ = self._client(
+            failed("Error: Project 'onap-doc' not found", status=NOT_FOUND)
+        )
         with self.assertRaises(ReadTheDocsError) as caught:
             _ = client.version_details("onap-doc", "latest")
         self.assertNotIsInstance(caught.exception, NotFoundError)
@@ -261,7 +298,8 @@ class MissingResources(unittest.TestCase):
         client, _ = self._client(
             failed(
                 "Error: Project 'onap-doc' failed with HTTP 400: "
-                + "Error: Project 'onap-doc' not found"
+                + "Error: Project 'onap-doc' not found",
+                status=NOT_FOUND,
             )
         )
         with self.assertRaises(ReadTheDocsError) as caught:
@@ -275,6 +313,96 @@ class MissingResources(unittest.TestCase):
         with self.assertRaises(ReadTheDocsError) as caught:
             _ = client.project_exists("onap-doc")
         self.assertNotIsInstance(caught.exception, NotFoundError)
+
+
+class Command(unittest.TestCase):
+    """The tool runs with the dependency set its release recorded."""
+
+    def test_a_pinned_version_asks_for_the_pinned_extra(self) -> None:
+        self.assertEqual(
+            ClientConfig(version="0.11.0").command(),
+            ["uvx", "--quiet", "--from", "lftools-uv[pinned]==0.11.0", "lftools-uv"],
+        )
+
+    def test_an_empty_version_asks_for_the_pinned_extra(self) -> None:
+        self.assertEqual(
+            ClientConfig().command(),
+            ["uvx", "--quiet", "--from", "lftools-uv[pinned]", "lftools-uv"],
+        )
+
+
+class SupportedVersions(unittest.TestCase):
+    """Only lftools-uv 0.11.0 and later have what the client relies on."""
+
+    def test_accepts_0_11_0_and_later(self) -> None:
+        for version in (
+            "",
+            "0.11.0",
+            "0.11",
+            "0.11.0.post1",
+            "v0.11.0",
+            "V0.11.0",
+            "0!0.11.0",
+            " 0.11.0 ",
+            "\t0.12.3\n",
+            "   ",
+            "1!0.1.0",
+            "0.11.1rc1",
+            "0.12.3",
+            "0.100.0",
+            "1.0.0",
+        ):
+            with self.subTest(version=version):
+                require_supported_version(version)
+
+    def test_refuses_releases_before_0_11_0(self) -> None:
+        for version in (
+            "0.8.0",
+            "0.9.0",
+            "0.10.1",
+            "0.10.99",
+            "0.11.0rc1",
+            "0.11.0.dev1",
+            "0.11.0-beta.2",
+            "0.11a1",
+            "v0.10.1",
+            "0!0.10.1",
+            "v0.11.0rc1",
+            " 0.10.1 ",
+        ):
+            with (
+                self.subTest(version=version),
+                self.assertRaisesRegex(ReadTheDocsError, "first lftools-uv release"),
+            ):
+                require_supported_version(version)
+
+    def test_refuses_a_value_that_is_not_a_release(self) -> None:
+        with self.assertRaisesRegex(ReadTheDocsError, "not a release number"):
+            require_supported_version("latest")
+
+    def test_refuses_an_old_release_before_any_call(self) -> None:
+        with (
+            mock.patch("lib.rtd_client.subprocess.run") as runner,
+            mock.patch("sys.stderr"),
+        ):
+            status = main(
+                [
+                    "--project",
+                    "onap-doc",
+                    "--parent-project",
+                    "onap",
+                    "--lftools-version",
+                    "0.10.1",
+                ]
+            )
+        self.assertEqual(status, 1)
+        runner.assert_not_called()
+
+    def test_trims_the_version_before_building_the_spec(self) -> None:
+        _, config = settings_from(
+            build_parser().parse_args(["--lftools-version", " 0.11.0\n"])
+        )
+        self.assertEqual(config.command()[3], "lftools-uv[pinned]==0.11.0")
 
 
 if __name__ == "__main__":

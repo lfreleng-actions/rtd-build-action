@@ -10,6 +10,7 @@ import logging
 import sys
 from typing import cast
 
+from lib.lftools_version import require_supported_version
 from lib.rtd_build import MODE_MERGE, MODE_VERIFY, Settings, run
 from lib.rtd_client import (
     ClientConfig,
@@ -97,7 +98,7 @@ def settings_from(namespace: argparse.Namespace) -> tuple[Settings, ClientConfig
         create_timeout=number("create_timeout", 600),
     )
     config = ClientConfig(
-        version=text("lftools_version"), launcher=text("launcher") or "uvx"
+        version=text("lftools_version").strip(), launcher=text("launcher") or "uvx"
     )
     return settings, config
 
@@ -108,6 +109,7 @@ def main(argv: list[str] | None = None) -> int:
     settings, config = settings_from(build_parser().parse_args(argv))
 
     try:
+        require_supported_version(config.version)
         outcome = run(settings, ReadTheDocsClient(config))
     except (NamingError, NotFoundError, ReadTheDocsError) as exc:
         _ = sys.stderr.write(f"Error: {exc}\n")
